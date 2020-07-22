@@ -1,0 +1,1064 @@
+# hansl code from package StrucTiSM 0.53 (2020-07-14)
+
+# private functions
+
+function matrix Rmat (int trend,
+                      int slope,
+                      int seas,
+                      int pd)
+    # this function returns a matrix mapping the stochastic shocks into the
+    # state transition variance matrix: it has as many rows as the dimension
+    # of the state vector and as many columns as the number of variances
+    # to estimate
+    ret = {}
+    if trend == 1
+        ret = diagcat(ret, 1)
+    elif trend == 2
+        ret = diagcat(ret, 0)
+    endif
+    if slope == 1
+        ret = diagcat(ret, 1)
+    elif slope == 2
+        ret = diagcat(ret, 0)
+    endif
+    k = pd - 1
+    if seas == 1
+        ret = diagcat(ret, mshape({1,0}, k, 1))
+    elif seas == 2
+        ret = diagcat(ret, 1 | zeros(k-1, 1))
+    elif seas == 3
+        ret = diagcat(ret, zeros(k, 1))
+    endif
+    return selifc(ret, maxc(ret) .> 0)
+end function
+
+function matrix Fseas (bool trig,
+                       scalar pd)
+    if trig
+        odd = pd % 2
+        dim = pd - 1
+        H = floor(pd/2) - 1 + odd
+        ret = zeros(dim, dim)
+        fin = 0
+        loop i = 1..H --quiet
+            ini = fin+1
+            fin = ini+1
+            scalar c = cos(2*$pi * i/pd)
+            scalar s = sin(2*$pi * i/pd)
+            ret[ini:fin, ini:fin] = {c, s; -s, c}
+        endloop
+        if !odd
+            ret[H*2 + 1, H*2 + 1] = -1
+        endif
+    else
+        # BSM transition matrix with dummy seasonals:
+        ret = -ones(1, $pd-1) | (I($pd-2) ~ 0)
+    endif
+    return ret
+end function
+
+function matrix Fmat (int slope,
+                      int seasonal,
+                      scalar pd)
+    matrix ret = slope ? { 1, 1; 0, 1 } : {1} # trend component
+    if seasonal
+        # seasonal component: 1 = trigonometric 2,3 = dummy
+        ret = diagcat(ret, Fseas(seasonal==1, pd))
+    endif
+    return ret
+end function
+
+function matrices InitSystemMats (int trend,
+                                  int slope,
+                                  int seasonal,
+                                  scalar *nStates,
+                                  scalar *nVar)
+    matrices ret = array(3)
+    # in this order: F (statemat), R (uset for statevar)
+    # H (obsmat)
+    # Transition equation
+    matrix ret[1] = Fmat(slope, seasonal, $pd)
+    nStates = rows(ret[1]) # size of state vector
+    # square matrix of var:
+    matrix ret[2] = Rmat(trend, slope, seasonal, $pd)
+    nVar = cols(ret[2])
+    # measurement equation: matrix of the state vector
+    matrix H = (slope) ? { 1; 0 } : {1} # trend component
+    if seasonal == 1  # stochastic trigonometric terms
+        H = H | mshape({1,0}, $pd - 1, 1)
+    elif seasonal > 1 # dummy variables (stochastic and deterministic)
+        H = H | 1 | zeros($pd-2, 1)
+    endif
+    ret[3] = H
+    # debug
+    ### loop i = 1..nelem(ret)
+    ###     printf "ret[%d]:\n%6.1f\n", i, ret[i]
+    ### endloop
+    if rows(ret[2]) != nStates
+        # sanity check
+        printf "Mismatch! (nStates = %d)\n", nStates
+        printf "statemat:\n%5.1f\n", ret[1]
+        printf "R:\n%5.1f\n", ret[2]
+        printf "obsmat:\n%5.1f\n", H
+    endif
+    return ret
+end function
+
+function matrix reparm (const matrix psi,
+                        int option[0:2:1],
+                        bool inverse[0])
+    set warnings off
+    # this function returns _variances_ given params
+    # option: 0 = abs 1 = square 2 = exp
+    matrix ret = {}
+    if option == 1
+        # what goes into mle is std. devs
+        ret = inverse ? sqrt(psi) : psi.^2
+    elif option == 2
+        # what goes into mle is log variances
+        ret = inverse ? ln(psi) : exp(psi)
+    else
+        # what goes into mle is variances
+        ret = abs(psi)
+    endif
+    return ret
+end function
+
+function scalar inject (matrix theta,
+                        bundle *kmod,
+                        bool eps,
+                        scalar nVar,
+                        const matrix R,
+                        scalar mapping,
+                        scalar nexog)
+    # this function injects the mle parameters into the Kalman bundle,
+    # given the characteristics of the model; returns an error value
+    scalar err = 0
+    ini = 1
+    if eps
+        kmod.obsvar = reparm(theta[1], mapping)
+        ini++
+    endif
+    fin = ini + nVar - 1
+    kmod.statevar[diag] = R * reparm(theta[ini:fin], mapping)
+    if nexog > 0
+        ini = fin + 1
+        fin = fin + nexog
+        kmod.obsxmat = theta[ini:fin]
+    endif
+    return err
+end function
+
+function series maybe_scale_depvar (series y,
+                                    scalar *scale,
+                                    bool verbosely[0])
+    # for now
+    scale = sd(y) / 100
+    ret = y / scale
+    if verbosely
+        printf "scale for dependent variable = %g\n", scale
+    endif
+    return ret
+end function
+
+function matrices adjust (matrix coeff,
+                          matrix vcv,
+                          scalar scale,
+                          int mapping,
+                          scalar nexog)
+    # this function re-maps the parameters used in "mle" into standard
+    # deviations, in the orginal unit of measurement; ret[1] contains the
+    # parameters, ret[2] their vcv (computed via the delta method)
+    matrices ret = array(2)
+    k = rows(coeff) - nexog
+    vc = coeff[1:k]
+    se_unscaled = sqrt(reparm(vc, mapping))
+    ret[1] = se_unscaled * scale
+    # the Jacobian
+    if mapping == 0
+        matrix J = 0.5 * scale ./ se_unscaled
+    elif mapping == 1
+        matrix J = mshape(scale, k, 1)
+    elif mapping == 2
+        matrix J = 0.5 .* ret[1]
+    endif
+    ret[2] = vcv[1:k,1:k] .* (J*J')
+    if nexog
+        betas = coeff[k+1:k+nexog] * scale
+        ret[1] |= betas
+        ret[2] = diagcat(ret[2], scale^2 * vcv[k+1:k+nexog,k+1:k+nexog])
+    endif
+    return ret
+end function
+
+function strings parlabels (bool epsilon,
+                            int trend,
+                            int slope,
+                            int seasonal,
+                            bool has_exog)
+    strings ret = array(0)
+    if epsilon
+        ret += "Irregular"
+    endif
+    if trend == 1
+        ret += "Trend"
+    endif
+    if slope == 1
+        ret += "Slope"
+    endif
+    if seasonal == 1
+        ret += "Seasonal (trig)"
+    elif seasonal == 2
+        ret += "Seasonal (dums)"
+    endif
+    # if has_exog
+    #     ret += "Exogenous"
+    # endif
+    return ret
+end function
+
+function string specification (bool epsilon,
+                               int trend,
+                               int slope,
+                               int seasonal)
+    string ret = ""
+    if trend == 1
+        ret = "Stochastic trend"
+    elif trend == 2
+        ret = "Deterministic trend"
+    endif
+    if slope == 0
+        ret = ret ~ ", no slope"
+    elif slope == 1
+        ret = ret ~ ", stochastic slope"
+    elif slope == 2
+        ret = ret ~ ", deterministic slope"
+    endif
+    if seasonal == 1
+        ret = ret ~ ", trigonometric seasonals"
+    elif seasonal == 2
+        ret = ret ~ ", dummy seasonals (stoch.)"
+    elif seasonal == 3
+        ret = ret ~ ", dummy seasonals (det.)"
+    endif
+    if epsilon
+        if strlen(ret) > 50
+            ret = sprintf("%s,\nirregular component", ret)
+        else
+            ret = ret ~ ", irregular component"
+        endif
+    endif
+    return ret
+end function
+
+function matrix Xtract (int slope,
+                        int seasonal,
+                        scalar pd)
+    # this function creates an n x k matrix, which extracts
+    # the components to export from the state vector
+    # the level is always there, either deterministic or stochastic
+    matrix ret = {1}
+    if slope > 0
+        ret = diagcat(ret, 1)
+    endif
+    if seasonal == 1
+        ret = diagcat(ret, mshape({1,0}, pd-1, 1))
+    elif seasonal == 2 || seasonal == 3
+        ret = diagcat(ret, 1 | zeros(pd-2, 1))
+    endif
+    return ret
+end function
+
+function scalar add_states_to_model (bundle *model,
+                                     const matrix J)
+    # does model contain estimates at all?
+    if !inbundle(model, "St")
+        printf "Error!\n"
+        return 0
+    endif
+    strings compnames = null
+    strings compdescs = null
+    scalar k = 1
+    scalar has_eps = model.epsilon
+    scalar ini = model.ini
+    scalar fin = model.fin
+    smpl ini fin
+    # initialise the "residuals"
+    if has_eps
+        series eps = model.depvar * model.scale
+    endif
+    # "name" holds the outer name of the dependent variable
+    name = model.depvarname
+    nStates = model.nStates
+    pd = model.pd
+    matrix St = model.St * J
+    # do the level ---------------------------------------------
+    string sername = name ~ "_level"
+    genseries(sername, St[,1])
+    compnames += sername
+    compdescs += "Trend level"
+    model[sername] = @sername
+    if has_eps
+        series eps -= @sername
+    endif
+    # do the slope, if present ---------------------------------
+    if model.slope == 1
+        k++
+        sername = name ~ "_slope"
+        genseries(sername, St[,k])
+        compnames += sername
+        compdescs += "Slope"
+        model[sername] = @sername
+    elif model.slope == 2
+        # just skip the deterministic slope
+        k++
+    endif
+    # do the seasonal, if present ------------------------------
+    if model.seasonal >= 1
+        k++
+        # printf "(seasonal) k = %d\n", k
+        sername = name ~ "_seas"
+        genseries(sername, St[,k])
+        compnames += sername
+        if model.seasonal == 1
+            compdescs += "Seasonal (with trigon. terms)"
+        elif model.seasonal > 1
+            compdescs += "Seasonal (with dummies)"
+        endif
+        model[sername] = @sername
+        if has_eps
+            series eps -= @sername
+        endif
+    endif
+    # do the exogenous component, if present ---------------------
+    if model.nexog >= 1
+        k++
+        nVar = model.nVar
+        sername = name ~ "_exo"
+        beta = model.coeff[has_eps + model.nVar + 1:]
+        genseries(sername, model.mX * beta)
+        compnames += sername
+        compdescs += "Exogenous"
+        model[sername] = @sername
+        if has_eps
+            series eps -= @sername
+        endif
+    endif
+    # finalise the irregular component, if present --------------
+    if has_eps
+        k++
+        sername = name ~ "_irreg"
+        genseries(sername, eps)
+        compnames += sername
+        compdescs += "Irregular"
+        model[sername] = @sername
+    endif
+    # Add the names of the newly created series to the bundle
+    strings model.compnames = compnames
+    strings model.compdescs = compdescs
+    return k
+end function
+
+function matrix qformvech (matrix X)
+    # vech(X'AX) = P (X ** X)' Q vech(A) = G vech(A)
+    # this function returns G
+    n = rows(X)
+    m = round(n * (n+1) / 2)
+    s = seq(1,m)
+    matrix P = vec(upper(unvech(s'))) .= s
+    n = cols(X)
+    m = round(n * (n+1) / 2)
+    s = seq(1,m)
+    matrix Q = vec(upper(unvech(s'))) .= s
+    matrix Q = Q || vec(lower(unvech(s'))) .= s
+    matrix ret = P'(X ** X) * Q
+    return ret
+end function
+
+function scalar check_for_special_cases (int trend,
+                                         int slope,
+                                         int seas)
+    ret = 0
+    # check for a few special cases that need no
+    # numerical optimisation
+    st_trend = (trend == 1)
+    st_slope = (slope == 1)
+    st_seas = (seas == 1) || (seas == 2)
+    if !(st_trend || st_slope || st_trend)
+        if trend==2 && slope==0 && seas == 0
+            # case 1: just a constant + irregular
+            ret = 1
+        elif trend==2 && slope==2 && seas == 0
+            # case 2: constant + trend + irregular
+            ret = 2
+        elif trend==2 && slope==0 && seas == 3
+            # case 3: constant + seasonal dummies + irregular
+            ret = 3
+        elif trend==2 && slope==2 && seas == 3
+            # case 4: constant + trend + seasonal dummies + irregular
+            ret = 4
+        endif
+    endif
+    return ret
+end function
+
+function matrix handle_special_case (int case,
+                                     const matrix y,
+                                     scalar pd)
+    T = rows(y)
+    X = ones(T, 1)
+    Tr = seq(1,T)'
+    matrix e = {}
+    if (case == 2) || (case == 4)
+        X ~= Tr
+    endif
+    if (case == 3) || (case == 4)
+        seas = (Tr % pd) .= seq(1,pd-1)
+        X ~= seas - (1/pd)
+    endif
+    Pi = mols(y, X, &e)
+    if case == 1
+        state = X*Pi
+    elif case == 2
+        state = X[,1:2]*Pi[1:2]
+        state = state ~ mshape(Pi[2], T, 1)
+    elif case == 3
+        state = mshape(Pi[1], T, 1) ~ X[,2:] * Pi[2:]
+    elif case == 4
+        state = X[,1:2]*Pi[1:2]
+        state = state ~ mshape(Pi[2], T, 1)
+        state = state ~ X[,3:] * Pi[3:]
+    endif
+    return e ~ state
+end function
+
+function scalar add_states_special (matrix St,
+                                    bundle *model)
+    case = model.special_case
+    strings compnames = null
+    strings compdescs = null
+    scalar ini = model.ini
+    scalar fin = model.fin
+    smpl ini fin
+    # "name" holds the outer name of the dependent variable
+    name = model.depvarname
+    nStates = cols(St) - 1
+    pd = model.pd
+    # do the irregular component --------------------------
+    sername = name ~ "_irreg"
+    genseries(sername, St[,1])
+    compnames += sername
+    compdescs += "Irregular"
+    model[sername] = @sername
+    # do the level ---------------------------------------------
+    string sername = name ~ "_level"
+    genseries(sername, St[,2])
+    compnames += sername
+    compdescs += "Trend level"
+    model[sername] = @sername
+    scalar k = 2
+    # do the slope, if present ---------------------------------
+    if (case==2) || (case == 4)
+        k++
+        sername = name ~ "_slope"
+        genseries(sername, St[,k])
+        compnames += sername
+        compdescs += "Slope"
+        model[sername] = @sername
+    endif
+    # do the seasonal, if present ------------------------------
+    if (case==3) || (case == 4)
+        k++
+        # printf "(seasonal) k = %d\n", k
+        sername = name ~ "_seas"
+        genseries(sername, St[,k])
+        compnames += sername
+        compdescs += "Seasonal (deterministic)"
+        model[sername] = @sername
+    endif
+    # do the exogenous component, if present ---------------------
+    if 0 # not for now
+        k++
+        nVar = model.nVar
+        sername = name ~ "_exo"
+        beta = model.coeff[has_eps + model.nVar + 1:]
+        genseries(sername, model.mX * beta)
+        compnames += sername
+        compdescs += "Exogenous"
+        model[sername] = @sername
+        if has_eps
+            series eps -= @sername
+        endif
+    endif
+    # Add the names of the newly created series to the bundle
+    strings model.compnames = compnames
+    strings model.compdescs = compdescs
+    model.stSE = mshape(NA,fin-ini+1, k)
+    return k
+end function
+
+function scalar kfcast (bundle *kmod,
+                        bool do_states,
+                        scalar horizon)
+    scalar n = kmod.n
+    scalar r = kmod.r
+    scalar T0 = kmod.T
+    matrix y = kmod.obsy | mshape(NA, horizon, n)
+    matrix F = kmod.statemat
+    matrix H = kmod.obsymat
+    matrix Sigma = kmod.statevar
+    bundle tmp = ksetup(y, H, F, Sigma)
+    varepsilon = inbundle(kmod, "obsvar") ? kmod.obsvar : 0
+    tmp.obsvar = varepsilon
+    err = kfilter(&tmp)
+    if !err
+        matrix Sf = tmp.state[T0+1:,]
+        kmod.fcast = Sf * H
+        if do_states
+            kmod.sfcast = Sf
+        endif
+        matrix Vhat = mshape(NA, horizon, round(n*(n+1)/2))
+        if do_states
+            matrix Omegahat = mshape(NA, horizon, round(r*(r+1)/2))
+        endif
+        loop i = 1 .. horizon --quiet
+            Om = tmp.stvar[T0 + i,]
+            if do_states
+                Omegahat[i,] = Om
+            endif
+            Vhat[i,] =  qform(H', unvech(Om')) + varepsilon
+        endloop
+        kmod.fcastvar = Vhat
+        if do_states
+            kmod.sfcastvar = Omegahat
+        endif
+    endif
+    return err
+end function
+
+function scalar fcast_special_case (bundle *mod,
+                                    scalar horizon,
+                                    bool do_states)
+    # here we handle special cases by relying on ordinary (non-state space)
+    # inferential methods, eg ols
+    scalar err = 0
+    case = mod.special_case
+    matrix y = mod.depvar * mod.scale
+    scalar T = rows(y)
+    matrix e = {}
+    Th = T+horizon
+    matrix X = ones(Th,1)
+    if (case == 2) || (case==4)
+        matrix X ~= seq(1, Th)' - Th/2
+    endif
+    if (case == 3) || (case==4)
+        pd = mod.pd
+        matrix X ~= mlag(seq(1,Th)' % pd .= 1, seq(0,pd-2))
+    endif
+    matrix b = mols(y, X[1:T,], &e)
+    scalar v = meanc(e.^2)
+    matrix f = X[T+1:Th,]*b
+    matrix fv = v .* seq(1,horizon)'
+    mod.fcast = f
+    mod.fcastvar = fv
+    return err
+end function
+
+function void fcast_printout (bundle model)
+    if !exists(model.fcast)
+        return
+    endif
+    matrix f = model.fcast
+    matrix s = sqrt(model.fcastvar)
+    string yname = model.depvarname
+    scalar h = rows(f)
+    printf "\nOut of sample forecast for %s\n\n", yname
+    printf "   horizon    forecast    std.err.\n\n"
+    loop i = 1 .. h --quiet
+        printf "%10d%12.6g%12.6g\n", i, f[i], s[i]
+    endloop
+    print ""
+end function
+
+function string purify (string src,
+                        strings to_clean,
+                        strings to_sub)
+    string l = ""
+    string ret = ""
+    scalar n = nelem(to_clean)
+    if n == 0
+        return src
+    endif
+    matrix len = zeros(1,n)
+    loop i=1..n --quiet
+        len[i] = strlen(to_clean[i])
+    endloop
+    loop while getline(src, l) --quiet
+        drop = 0
+        # printf "%s\n", l
+        loop i=1..n --quiet
+            scalar sl = len[i]
+            m = strncmp(l, to_clean[i], sl)
+            # printf "\t%s -> %d\n", to_clean[i], m
+            if m == 0
+                drop = i
+                break
+            endif
+        endloop
+        if drop
+            if strlen(to_sub[i]) > 0
+                ret += sprintf("%s\n", to_sub[i])
+            endif
+        else
+            ret += sprintf("%s\n", l)
+        endif
+    endloop
+    return ret
+end function
+
+function void seas_plot (list y_lev,
+                         series sea,
+                         string name)
+    fname = "@dotdir/STSMtmp.gp"
+    fname1 = "@dotdir/STSMtmp1.gp"
+    fname2 = "@dotdir/STSMtmp2.gp"
+    plot y_lev
+        options time-series with-lines single-yaxis
+        printf "set title \"%s and trend component\"", name
+    end plot --output=@fname1
+    plot sea
+        options time-series with-lines
+        literal set title "seasonal component"
+    end plot --output=@fname2
+    buf = sprintf("set multiplot\nset size 1, 0.5\nset origin 0.0, 0.5\n")
+    buf ~= readfile(fname1)
+    buf ~= sprintf("\nset origin 0.0, 0.0\n")
+    f2 = readfile(fname2)
+    a = defarray("set ylabel")
+    b = defarray("unset ylabel")
+    buf ~= sprintf("%s\nunset multiplot\n", purify(f2, a, b))
+    outfile @fname --write
+    printf "%s", buf
+    outfile --close
+    gnuplot --input=@fname --output=display
+end function
+
+# public functions
+
+function bundle STSM_GUImeta (series y "Dependent variable",
+                              int spec[1:3:1] "Model" {"LL (local level)", "LLT (local linear trend)", "BSM (basic structural model)"},
+                              list X[null] "Exogenous explanatory variables",
+                              bool custom[0] "Custom model",
+                              int trend[1:2:1] "Custom Trend" {"Stochastic", "Deterministic"},
+                              int slope[0:2:1] "Custom Slope" {"None", "Stochastic", "Deterministic"},
+                              int seas[0:3:0] "Custom Seasonal" {"None", "Stochastic (trig)", "Stochastic (dummies)", "Deterministic"},
+                              bool epsilon[1] "Custom Irregular")
+    # usual settings (LLT baseline)
+    # override for some specs
+    if !custom
+        if spec == 1    # LL
+            epsilon = 1
+            trend = 1
+            slope = 0
+            seas = 0
+        elif spec == 2  # LLT
+            epsilon = 1
+            trend = 1
+            slope = 1
+            seas = 0
+        elif spec == 3 # BSM
+            epsilon = 1
+            trend = 1
+            slope = 1
+            seas = 2
+        endif
+    endif
+    bundle model = STSM_setup(y, epsilon, trend, slope, seas, X)
+    if model.err
+        printf "Error: %s\n", errmsg(model.err)
+    else
+        # this must be done by hand
+        model.depvarname = argname(y)
+        model.err = STSM_estimate(&model)
+    endif
+    return model
+end function
+
+function void STSM_GUIplot (bundle *model)
+    scalar ini = model.ini
+    scalar fin = model.fin
+    smpl ini fin
+    seasonal = model.seasonal > 0
+    list G = null
+    sername = model.depvarname
+    G += genseries(sername, model.depvar * model.scale)
+    list comps = STSM_components(model)
+    string trendname = sername  ~ "_level"
+    if model.nexog > 0
+        string exoname = sername  ~ "_exo"
+        series @trendname += @exoname
+    endif
+    list G += @trendname
+    if !seasonal
+        plot G
+            options time-series with-lines single-yaxis
+        end plot --output=display
+    else
+        seasname = sername  ~ "_seas"
+        seas_plot(G, @seasname, sername)
+    endif
+end function
+
+function bundle STSM_setup (series y "Dependent variable",
+                            bool epsilon[1] "error in obs. eq",
+                            int trend[1:2:1] "Trend" {"stochastic", "deterministic"},
+                            int slope[0:2:1] "Slope" {"none", "stochastic", "deterministic"},
+                            int seasonal[0:3:0] "Seasonal" {"none", "stochastic with trigonometric terms", "stochastic with dummies", "deterministic dummies"},
+                            list X[null] "Exogenous variables")
+    set skip_missing off
+    bundle tmp = defbundle("epsilon", epsilon, "trend", trend, "slope",   slope, "seasonal", seasonal, "err", 0)
+    # --- check if the model makes sense -------------------------
+    if seasonal && ($pd == 1)
+        tmp.err = 10 # E_PDWRONG
+        return tmp
+    endif
+    string name = argname(y)
+    if strlen(name) == 0 # anonymous generated series
+        name = "Y"
+    endif
+    X -= const # just in case
+    scalar nexog = nelem(X)
+    # --- set the sample sensibly --------------------------------
+    list Z = y X
+    okobs = zeromiss(ok(Z))
+    ini = xmax(firstobs(okobs), $t1)
+    fin = xmin(lastobs(okobs), $t2)
+    if fin == ini
+        tmp.err = 45 # E_TOOFEW
+        return tmp
+    endif
+    smpl ini fin
+    smplstr = sprintf("%s - %s", obslabel(ini), obslabel(fin))
+    # ------------------------------------------------------------
+    scalar nStates = NA
+    scalar nVar = NA
+    scalar scale = NA
+    series scaled_y = maybe_scale_depvar(y, &scale)
+    # intercept special cases first
+    spcase = check_for_special_cases(trend, slope, seasonal)
+    if spcase
+        matrices SysMat = array(0)
+    else
+        matrices SysMat = InitSystemMats(trend, slope, seasonal, &nStates, &nVar)
+    endif
+    # --- DEBUG --------------------------------------
+    ### printf "statemat:\n%6.2f\n", SysMat[1]
+    ### printf "R:\n%6.2f\n", SysMat[2]
+    ### printf "obsmat:\n%6.2f\n", SysMat[3]
+    ### print nStates nVar
+    # --- END DEBUG-----------------------------------
+    bundle tmp = tmp + defbundle("depvar", {scaled_y}, "depvarname", name, "ini", ini, "fin", fin, "smplstr", smplstr, "pd", $pd, "scale", scale, "nStates", nStates, "nVar", nVar, "T", fin - ini + 1, "nexog", nexog, "SysMat", SysMat,    "special_case", spcase)
+    if nexog > 0
+        tmp.xnames = varname(X)
+        tmp.mX = {X}
+    endif
+    return tmp
+end function
+
+function scalar STSM_estimate (bundle *mod,
+                               int verbose[0:3:1],
+                               int mapping[0:2:1],
+                               int vcvmethod[0:2:1])
+    # mapping: Reparametrisation (0 = Variances, 1 = Std. Dev (def), 2 = log)
+    # vcvmethod: 0 = opg, 1 = Hessian (def), 2 = robust
+    ini = mod.ini
+    fin = mod.fin
+    smpl ini fin
+    set warnings off
+    scalar nStates = mod.nStates
+    scalar nVar = mod.nVar
+    scalar scale = mod.scale
+    scalar has_eps = mod.epsilon
+    scalar nexog = mod.nexog
+    scalar has_exog = (nexog > 0)
+    mod.mapping = mapping
+    if mod.special_case
+        matrix spcase = handle_special_case(mod.special_case,     mod.depvar, mod.pd)
+        St = spcase * scale
+        add_states_special(St, &mod)
+        if verbose
+            STSM_printout(&mod)
+        endif
+        return 0
+    endif
+    # sanity check
+    if mod.nVar == 0 && !(mod.epsilon)
+        printf "No variances to estimate!\n"
+        return 2 # E_DATA
+    endif
+    matrices SysMat = mod.SysMat
+    # parameters to estimate
+    if mapping == 2
+        matrix psi = zeros(nVar + has_eps, 1)
+        stdveps = 0
+    else
+        a = 4
+        matrix psi = ones(nVar + has_eps, 1) .* a
+        stdveps = a
+    endif
+    if verbose == 0 || verbose == 1
+        setopt mle --quiet
+    elif verbose == 2
+        setopt mle --verbose
+    endif
+    if vcvmethod == 1
+        setopt mle --hessian
+    elif vcvmethod == 2
+        setopt mle --robust
+    endif
+    # Define the model ------------------------------------------------------
+    bundle SSmod = ksetup(mod.depvar, SysMat[3], SysMat[1], zeros(nStates, nStates))
+    matrix R = SysMat[2]
+    # --- experimental -----------------
+    # in the future, we may want to set the initial state for the
+    # level as an extra parameter for mle
+    SSmod.inistate = zeros(nStates, 1)
+    SSmod.inistate[1] = meanc(mod.depvar[1:$pd])
+    # printf "inistate:\n%g\n", SSmod.inistate
+    # ---------------------------------
+    if has_exog > 0
+        matrix y = mod.depvar
+        matrix X = mod.mX
+        SSmod.obsx = X
+        matrix beta = mols(diff(y), diff(X)) #.* scale
+        psi = psi | beta
+        # printf "beta = \n%16.8f", beta
+    endif
+    # ML estimation ---------------------------------------------------------
+    # test run
+    ERR = inject(psi, &SSmod, has_eps, nVar, R, mapping, nexog)
+    ERR = ERR || kfilter(&SSmod)
+    if ERR
+        printf "Init failed!\n"
+        return 2 # E_DATA
+    else
+        if verbose > 1
+            printf "Init OK\n"
+        endif
+        series ll = SSmod.llt
+    endif
+    # check dimensions
+    # printf "rows(llt) = %d, nobs = %d\n", nobs(ll), $nobs
+    set lbfgs on # seems to perform better than plain BFGS
+    catch mle ll = ERR ? NA : misszero(ll)
+        ERR = inject(psi, &SSmod, has_eps, nVar, R, mapping, nexog)
+        ERR = ERR || kfilter(&SSmod)
+        series ll = SSmod.llt
+        params psi
+    end mle
+    scalar err1 = $error
+    if err1
+        printf "error! %s\n", errmsg(err1)
+        return err1
+    endif
+    # --- mle done; now pack the results nicely ---------------------
+    matrices results = adjust($coeff, $vcv, scale, mapping, nexog)
+    mod.coeff = results[1]
+    mod.vcv = results[2]
+    mod.llt = {ll} - ln(scale)
+    if verbose
+        STSM_printout(&mod)
+    endif
+    Err = ksmooth(&SSmod)
+    if Err
+        printf "Smoothing failed! (%s)\n", errmsg(Err)
+        return Err
+    endif
+    mod.St = SSmod.state * scale
+    # take care of the unobserved components
+    J = Xtract(mod.slope, mod.seasonal, mod.pd)
+    k = add_states_to_model(&mod, J)
+    J = qformvech(J)
+    dg = diag(unvech(seq(1,cols(J))'))
+    mod.stSE = sqrt(SSmod.stvar * J[,dg]) * scale
+    return 0
+end function
+
+function void STSM_printout (bundle *model)
+    string name = model.depvarname
+    string sample = model.smplstr
+    scalar scale = model.scale
+    scalar mapping = model.mapping
+    has_eps = model.epsilon
+    has_exog = model.nexog > 0
+    trend = model.trend
+    slope = model.slope
+    seasonal = model.seasonal
+    strings plabs = parlabels(has_eps, trend, slope, seasonal, has_exog)
+    if model.nexog > 0
+        plabs += strsplit(strsub(model.xnames,","," "))
+    endif
+    printf "\nStructural model for %s, %s (T = %d)\n", name, sample, sum(ok(model.depvar))
+    if model.special_case
+        printf "Estimation carried out via OLS."
+    else
+        cf = model.coeff ~ sqrt(diag(model.vcv))
+        # k = rows(cf)
+        modprint cf plabs
+        # maps = defarray("Variances", "Std. Dev", "log")
+        # printf "mapping = %s, scale = %g\n", maps[mapping+1], scale
+        printf "Average log-likelihood = %g\n", meanc(model.llt)
+    endif
+    printf "\n\nSpecification:\n\n%s\n\n", specification(has_eps, trend, slope, seasonal)
+end function
+
+function list STSM_components (bundle mod,
+                               bool stderrs[0])
+    list comp = null
+    # does mod contain estimates at all?
+    if !inbundle(mod, "compnames")
+        printf "It seems that bundle %s doesn't contain the states\n", argname(mod)
+        return comp
+    endif
+    cn = mod.compnames
+    cd = mod.compdescs
+    n = nelem(cn)
+    m = cols(mod.stSE)
+    loop i = 1 .. n --quiet
+        name = cn[i]
+        desc = cd[i]
+        comp += genseries(name, mod[name])
+        setinfo @name --description="@desc"
+        if stderrs && !mod.special_case &&(i<=m) # don't do irregular & exog
+            comp += genseries(name ~ "_se", mod.stSE[,i])
+            setinfo @name --description="@desc (s.e.)"
+        endif
+    endloop
+    return comp
+end function
+
+function scalar STSM_fcast (bundle *mod,
+                            int horizon[0],
+                            bool verbose[1],
+                            bool do_states[0])
+    # this function computed forecasts by setting up an auxiliary
+    # Kalman bundle in which we append a vector of NAs at the end of the
+    # dependent variable and then we run the forward filter; the
+    # forecasts are then computed from the filtered states.
+    #
+    # If (do_states), then store the forecast states too (default: don't)
+    scalar err = 0
+    # set forecasting horizon to a sensible default if not passed by the user
+    if !exists(horizon) || horizon == 0
+        if $pd == 1
+            horizon = 10
+        elif ($pd == 4)
+            horizon = 8
+        elif ($pd == 5) || ($pd == 6) || ($pd == 7)
+            horizon = 2 * $pd
+        elif ($pd == 12)
+            horizon = 12
+        else
+            horizon = $pd
+        endif
+    endif
+    if mod.special_case
+        # handle special cases first
+        err = fcast_special_case(&mod, horizon, do_states)
+        if verbose
+            fcast_printout(mod)
+        endif
+        return err
+    endif
+    if mod.nexog > 0
+        printf "Forecasting with exogenous variable not supported yet\n"
+        err = 1
+        return err
+    endif
+    # does mod contain estimates at all?
+    if !inbundle(mod, "compnames")
+        printf "It seems that bundle %s doesn't contain the states\n", argname(mod)
+        err = 30 # E_BADSTAT
+        return err
+    endif
+    ###
+    # now re-pack stuff into a temporary Kalman bundle
+    ###
+    matrices M = mod.SysMat
+    scalar mapping = mod.mapping
+    scalar scale = mod.scale
+    scalar has_eps = mod.epsilon
+    scalar n = mod.nVar
+    matrix depvar = mod.depvar
+    # set up the ssm from scratch
+    matrix F = M[1] # transition matrix
+    matrix R = M[2] # map from shocks to state innovations
+    matrix H = M[3] # observation matrix
+    scalar r = rows(R)
+    matrix Sigma = zeros(r, r)
+    kmod = ksetup(depvar, H, F, Sigma)
+    if ok(n) && n > 0
+        matrix coeff = mod.coeff
+        err = inject(coeff, &kmod, has_eps, n, R, mapping, 0)
+    endif
+    # perform the forecast and copy the results back to the original bundle
+    err = kfcast(&kmod, do_states, horizon)
+    if !err
+        mod = mod + defbundle("fcast", kmod.fcast * scale, "fcastvar", kmod.fcastvar)
+        if do_states
+            # also store forecasts for the unobserved components
+            J = scale * Xtract(mod.slope, mod.seasonal, mod.pd)
+            sf = kmod.sfcast * J
+            sv = {}
+            loop i = 1 .. horizon
+                V = unvech(kmod.sfcastvar[i,]')
+                sv |= vech(qform(J', V))'
+            endloop
+            mod = mod + defbundle("sfcast", sf, "sfcastvar", sv)
+        endif
+    endif
+    if verbose
+        fcast_printout(mod)
+    endif
+    return err
+end function
+
+function list LLT (series y,
+                   bool se[0],
+                   bundle *out[null])
+    mod = STSM_setup(y, 1, 1, 1, 0)
+    list ret = null
+    if mod.err
+        printf "%s\n", errmsg(mod.err)
+        return ret
+    endif
+    mod.depvarname = argname(y)
+    mod.err = STSM_estimate(&mod)
+    if !mod.err
+        list ret = STSM_components(mod, se)
+    endif
+    if exists(out)
+        out = mod
+    endif
+    return ret
+end function
+
+function list BSM (series y,
+                   bool se[0],
+                   bundle *out[null])
+    mod = STSM_setup(y, 1, 1, 1, 2)
+    list ret = null
+    if mod.err
+        printf "%s\n", errmsg(mod.err)
+        return ret
+    endif
+    mod.depvarname = argname(y)
+    mod.err = STSM_estimate(&mod)
+    if !mod.err
+        list ret = STSM_components(mod, se)
+    endif
+    if exists(out)
+        out = mod
+    endif
+    return ret
+end function
