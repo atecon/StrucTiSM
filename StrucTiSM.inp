@@ -1,0 +1,469 @@
+include StateSpace.inp
+include utils.inp
+include special_cases.inp
+include forecast.inp
+include StrucTiSM_GUI.inp
+
+# Index:
+# STSM_setup
+# STSM_estimate
+# STSM_fcast
+# STSM_printout
+# STSM_components
+# LLT
+# BSM
+
+function bundle STSM_setup (series y "Dependent variable",
+                            bool epsilon[1]     "error in obs. eq",
+                            int trend[1:2:1]    "Trend"    {"stochastic" "deterministic"},
+                            int slope[0:2:1]    "Slope"    {"none" "stochastic" "deterministic"},
+                            int seasonal[0:3:0] "Seasonal" {"none" "stochastic with trigonometric terms" \
+                            "stochastic with dummies" "deterministic dummies"},
+                            list X[null] "Exogenous variables")
+
+    set skip_missing off
+    bundle tmp = defbundle("epsilon", epsilon, "trend", trend, "slope",
+      slope, "seasonal", seasonal, "err", 0)
+
+    # --- check if the model makes sense -------------------------
+    errorif( seasonal && ($pd == 1), "cannot add seasonals for periodicity 1")
+        # tmp.err = 10 # E_PDWRONG
+        # return tmp
+    # endif
+
+    # get dep var name (and catch the anonymous case)
+    string name = !strlen(argname(y)) ? "Y" : argname(y)
+    # if strlen(name) == 0 # anonymous generated series
+    #     name = "Y"
+    # endif
+
+    X -= const # just in case
+    scalar nexog = nelem(X)
+
+    # --- set the sample sensibly --------------------------------
+    list Z = y X
+    okobs = zeromiss(ok(Z))
+
+    ini = xmax(firstobs(okobs), $t1)
+    fin = xmin(lastobs(okobs), $t2)
+
+    errorif( fin == ini, "no effective observations available")
+    # tmp.err = 45 # E_TOOFEW
+    #    return tmp
+    # endif
+
+    smpl ini fin
+    smplstr = sprintf("%s - %s", obslabel(ini), obslabel(fin))
+    # ------------------------------------------------------------
+
+    scalar nStates = NA
+    scalar nVar = NA # number of variances to estimate
+    scalar scale = NA
+    series scaled_y = maybe_scale_depvar(y, &scale)
+
+    # intercept special cases first
+    spcase = check_for_special_cases(trend, slope, seasonal)
+    if spcase
+        matrices SysMat = array(0)
+    else
+        matrices SysMat = InitSystemMats(trend, slope, seasonal, &nStates, &nVar)
+    endif
+
+    bundle tmp = tmp + defbundle("depvar", {scaled_y}, "depvarname", name,
+      "ini", ini, "fin", fin, "smplstr", smplstr,
+      "pd", $pd, "scale", scale,
+      "nStates", nStates, "nVar", nVar,
+      "T", fin - ini + 1,
+      "nexog", nexog, "SysMat", SysMat,
+      "special_case", spcase)
+
+    if nexog > 0
+        list   tmp.X = X	# only needed for forecasting	
+        string tmp.xnames = varname(X)
+        matrix tmp.mX = {X}
+    endif
+
+    return tmp
+
+end function
+
+###############################
+
+
+function scalar STSM_estimate (bundle *mod, int verbose[0:3:1],
+                               int mapping[0:2:1], int vcvmethod[0:2:1])
+
+    # mapping: Reparametrisation (0 = Variances, 1 = Std. Dev (def), 2 = log)
+    # vcvmethod: 0 = opg, 1 = Hessian (def), 2 = robust
+
+    ini = mod.ini
+    fin = mod.fin
+    smpl ini fin
+    set warnings off
+
+    nStates = mod.nStates
+    nVar    = mod.nVar
+    scale   = mod.scale
+    has_eps = mod.epsilon
+    nexog   = mod.nexog
+    has_exog = (nexog > 0)
+
+    mod.mapping = mapping
+
+    if mod.special_case
+        matrix spcase = handle_special_case(mod.special_case,
+          mod.depvar, mod.pd)
+        St = spcase * scale
+        add_states_special(St, &mod)
+        if verbose
+            STSM_printout(&mod)
+        endif
+        return 0
+    endif
+
+    # sanity check
+    errorif( mod.nVar == 0 && !(mod.epsilon), "No variances to estimate!")
+        # return 2 # E_DATA
+    # endif
+
+    matrices SysMat = mod.SysMat
+
+    # parameters to estimate
+
+    if mapping == 2
+        matrix psi = zeros(nVar + has_eps, 1)
+        stdveps = 0
+    else
+        a = 4
+        matrix psi = ones(nVar + has_eps, 1) .* a
+        stdveps = a
+    endif
+
+    if verbose == 0 || verbose == 1
+        setopt mle --quiet
+    elif verbose == 2
+        setopt mle --verbose
+    endif
+
+    if vcvmethod == 1
+        setopt mle --hessian
+    elif vcvmethod == 2
+        setopt mle --robust
+    endif
+
+    # Define the model ------------------------------------------------------
+    bundle SSmod = ksetup(mod.depvar, SysMat[3], SysMat[1], zeros(nStates, nStates))
+    matrix R = SysMat[2]
+
+    # --- experimental -----------------
+    # in the future, we may want to set the initial state for the
+    # level as an extra parameter for mle
+    SSmod.inistate = zeros(nStates, 1)
+    SSmod.inistate[1] = meanc(mod.depvar[1:$pd])
+    # printf "inistate:\n%g\n", SSmod.inistate
+    # ---------------------------------
+
+    if has_exog > 0
+        matrix y = mod.depvar
+        matrix X = mod.mX
+        SSmod.obsx = X
+        matrix beta = mols(diff(y), diff(X)) #.* scale
+        psi = psi | beta
+    endif
+
+    # ML estimation ---------------------------------------------------------
+    # test run
+    ERR = inject(psi, &SSmod, has_eps, nVar, R, mapping, nexog)
+    ERR = ERR || kfilter(&SSmod)
+
+    errorif( ERR, "ML init failed!")
+        # return 2 # E_DATA
+    # else
+        if verbose > 1
+            printf "Init OK\n"
+        endif
+        series ll = SSmod.llt
+    # endif
+
+    set lbfgs on # seems to perform better than plain BFGS
+
+    catch mle ll = ERR ? NA : misszero(ll)
+        ERR = inject(psi, &SSmod, has_eps, nVar, R, mapping, nexog)
+        ERR = ERR || kfilter(&SSmod)
+        series ll = SSmod.llt
+        params psi
+    end mle
+    scalar err1 = $error
+
+    if err1
+        printf "error! %s\n", errmsg(err1)
+        return err1
+    endif
+
+    # --- mle done; now pack the results nicely ---------------------
+
+    matrices results = adjust($coeff, $vcv, scale, mapping, nexog)
+    mod.coeff = results[1]
+    mod.vcv = results[2]
+    mod.llt = {ll} - ln(scale)
+
+    if verbose
+        STSM_printout(&mod)
+    endif
+
+    Err = ksmooth(&SSmod)
+    errorif( Err, sprintf("Smoothing failed! (%s)", errmsg(Err)))
+    
+    #    return Err
+    # endif
+
+    mod.St = SSmod.state * scale
+
+    # take care of the unobserved components
+
+    J = Xtract(mod.slope, mod.seasonal, mod.pd)
+    k = add_states_to_model(&mod, J)
+    J = qformvech(J)
+    dg = diag(unvech(seq(1,cols(J))'))
+    mod.stSE = sqrt(SSmod.stvar * J[,dg]) * scale
+
+    return 0
+
+end function
+
+###########################################
+
+function scalar STSM_fcast(bundle *mod, int horizon[0], bool verbose[1],
+                           bool do_states[0])
+
+    # This function computes forecasts by setting up an auxiliary
+    # Kalman bundle in which we append a vector of NAs at the end of the
+    # dependent variable and then we run the forward filter; the
+    # forecasts are then computed from the filtered states.
+    #
+    # If (do_states), then store the forecast states too (default: don't)
+    # 
+    # The case with exogenous variables is a little different because we 
+    # need the future values of those. So then we require that the 
+    # available sample is larger than the original estimation sample. 
+
+    scalar err = 0
+    
+    # set forecasting horizon to a sensible default if not passed by the user
+    if !exists(horizon) || horizon == 0
+        horizon = set_horizon()
+    endif
+
+    if mod.special_case
+        # handle special cases first
+        err = fcast_special_case(&mod, horizon, do_states)
+        if verbose
+            fcast_printout(mod)
+        endif
+        return err
+    endif
+
+    if mod.nexog > 0
+        # Old:
+        # printf "Forecasting with exogenous variable not supported yet\n"
+        
+        errorif( $t2 < mod.fin + horizon, \
+          sprintf("need expanded sample (by %d periods ", horizon) ~ \
+          "to access exogenous values for forecasting")
+          
+        if !inbundle(mod, "fullmX") # could already be done by GUI function
+            matrix mod.fullmX = {mod.X}
+            # cut to desired forecasting horizon if sample is longer
+            # (here we kind of hope that the user didn't mess with the 
+            # sample start, i.e. only the end can be shifted!)
+            mod.fullmX = mod.fullmX[1: mod.T + horizon, ]
+        endif
+            
+        errorif( rows(mod.fullmX) != rows(mod.mX) + horizon, \
+            "length of exo values (fullmX) doesn't match horizon")
+    endif
+
+    # does mod contain estimates at all?
+    errorif( !inbundle(mod, "compnames"), sprintf( \
+        "It seems that bundle %s doesn't contain the states\n", argname(mod)))
+    #    err = 30 # E_BADSTAT
+    #    return err
+    # endif
+
+    ###
+    # now re-pack stuff into a temporary Kalman bundle
+    ###
+
+    # matrices M     = mod.SysMat
+    # scalar mapping = mod.mapping
+    # scalar scale   = mod.scale
+    # scalar has_eps = mod.epsilon
+    # scalar n       = mod.nVar
+    # matrix depvar  = mod.depvar
+
+    # set up the ssm from scratch (Sven: but why actually??)
+
+    matrix F = mod.SysMat[1] # transition matrix
+    matrix R = mod.SysMat[2] # map from shocks to state innovations
+    matrix H = mod.SysMat[3] # observation matrix
+    scalar r = rows(R)
+    matrix Sigma = zeros(r, r)
+    
+    bundle kmod = ksetup(mod.depvar, H, F, Sigma)
+    kmod.nexog = mod.nexog
+    kmod.scale = mod.scale
+    
+    if ok(mod.nVar) && mod.nVar > 0 # ok(n) && n > 0
+        # matrix coeff = mod.coeff
+        err = inject(mod.coeff, &kmod, mod.epsilon, mod.nVar, R, mod.mapping, mod.nexog)
+        # (also defines kmod.obsxmat if applicable)
+        
+        if mod.nexog
+            # copy the out-of-sample exo regressors
+            matrix kmod.fullmX = mod.fullmX
+        endif
+    endif
+
+    # perform the forecast and copy the results back to the original bundle
+
+    # bwrite(kmod, "/tmp/before.xml")   # debugging
+    err = kfcast(&kmod, do_states, horizon)
+    # bwrite(kmod, "/tmp/after.xml")    # debugging
+
+    if !err
+        mod = mod + defbundle("fcast", kmod.fcast * mod.scale, "fcastvar", kmod.fcastvar)
+        if do_states
+            # also store forecasts for the unobserved components
+            J = mod.scale * Xtract(mod.slope, mod.seasonal, mod.pd)
+            sf = kmod.sfcast * J
+            sv = {}
+            loop i = 1 .. horizon
+                V = unvech(kmod.sfcastvar[i,]')
+                sv |= vech(qform(J', V))'
+            endloop
+
+            mod = mod + defbundle("sfcast", sf, "sfcastvar", sv)
+        endif
+    endif
+
+    if verbose
+        fcast_printout(mod)
+    endif
+
+    return err
+end function
+
+##########################################
+
+function void STSM_printout(bundle *model)
+
+    string name = model.depvarname
+    string sample = model.smplstr
+    scalar scale = model.scale
+    scalar mapping = model.mapping
+    has_eps = model.epsilon
+    has_exog = model.nexog > 0
+    trend = model.trend
+    slope = model.slope
+    seasonal = model.seasonal
+
+    strings plabs = parlabels(has_eps, trend, slope, seasonal, has_exog)
+    if model.nexog > 0
+        plabs += strsplit(strsub(model.xnames,","," "))
+    endif
+
+    printf "\nStructural model for %s, %s (T = %d)\n", name, sample,
+      sum(ok(model.depvar))
+
+    if model.special_case
+        printf "Estimation carried out via OLS."
+    else
+        cf = model.coeff ~ sqrt(diag(model.vcv))
+        # k = rows(cf)
+        modprint cf plabs
+        # maps = defarray("Variances", "Std. Dev", "log")
+        # printf "mapping = %s, scale = %g\n", maps[mapping+1], scale
+
+        printf "Average log-likelihood = %g\n", meanc(model.llt)
+    endif
+
+    printf "\n\nSpecification:\n\n%s\n\n", \
+      specification(has_eps, trend, slope, seasonal)
+
+end function
+
+#####################################
+
+function list STSM_components(bundle mod, bool stderrs[0])
+    list comp = null
+    # does mod contain estimates at all?
+    if !inbundle(mod, "compnames")
+        printf "It seems that bundle %s doesn't contain the states\n",
+          argname(mod)
+        return comp
+    endif
+
+    cn = mod.compnames
+    cd = mod.compdescs
+
+    n = nelem(cn)
+    m = cols(mod.stSE)
+    loop i = 1 .. n --quiet
+        name = cn[i]
+        desc = cd[i]
+        comp += genseries(name, mod[name])
+        setinfo @name --description="@desc"
+        if stderrs && !mod.special_case &&(i<=m) # don't do irregular & exog
+            comp += genseries(name ~ "_se", mod.stSE[,i])
+            setinfo @name --description="@desc (s.e.)"
+        endif
+    endloop
+
+    return comp
+end function
+
+###
+### Shortcut functions
+###
+
+function list LLT(series y, bool se[0], bundle *out[null])
+    mod = STSM_setup(y, 1, 1, 1, 0)
+    list ret = null
+    if mod.err
+        printf "%s\n", errmsg(mod.err)
+        return ret
+    endif
+
+    mod.depvarname = argname(y)
+    mod.err = STSM_estimate(&mod)
+    if !mod.err
+        list ret = STSM_components(mod, se)
+    endif
+
+    if exists(out)
+        out = mod
+    endif
+
+    return ret
+end function
+
+function list BSM(series y, bool se[0], bundle *out[null])
+    mod = STSM_setup(y, 1, 1, 1, 2)
+    list ret = null
+    if mod.err
+        printf "%s\n", errmsg(mod.err)
+        return ret
+    endif
+
+    mod.depvarname = argname(y)
+    mod.err = STSM_estimate(&mod)
+    if !mod.err
+        list ret = STSM_components(mod, se)
+    endif
+
+    if exists(out)
+        out = mod
+    endif
+
+    return ret
+end function

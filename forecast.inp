@@ -1,0 +1,120 @@
+function scalar kfcast(bundle *kmod, bool do_states, scalar horizon)
+
+    n = kmod.n
+    r = kmod.r
+
+    T0 = kmod.T
+    matrix y = kmod.obsy | mshape(NA, horizon, n)
+
+    matrix F = kmod.statemat
+    matrix H = kmod.obsymat
+    matrix Sigma = kmod.statevar
+
+    bundle tmp = ksetup(y, H, F, Sigma)
+    
+    # insert in-sample as well as out-of-sample exogenous values
+    if kmod.nexog # does this also count a constant term??
+        tmp.nexog = kmod.nexog
+        matrix tmp.obsx = kmod.fullmX
+	# the exogenous variables are unscaled, hence the correction
+        matrix tmp.obsxmat = kmod.obsxmat ./ kmod.scale
+    endif
+    
+    varepsilon = inbundle(kmod, "obsvar") ? kmod.obsvar : 0
+    tmp.obsvar = varepsilon
+
+    err = kfilter(&tmp)
+    
+    if !err
+        matrix Sf = tmp.state[T0+1:,]
+        kmod.fcast = Sf * H
+        
+        # add the exo influence:
+        if kmod.nexog
+            kmod.fcast += tmp.obsx[T0+1:,] * tmp.obsxmat
+        endif
+        
+        if do_states
+            kmod.sfcast = Sf
+        endif
+
+        matrix Vhat = mshape(NA, horizon, round(n*(n+1)/2))
+        if do_states
+            matrix Omegahat = mshape(NA, horizon, round(r*(r+1)/2))
+        endif
+
+        loop i = 1 .. horizon 
+            Om = tmp.stvar[T0 + i,]
+            if do_states
+                Omegahat[i,] = Om
+            endif
+            Vhat[i,] =  qform(H', unvech(Om')) + varepsilon
+        endloop
+        kmod.fcastvar = Vhat
+
+        if do_states
+            kmod.sfcastvar = Omegahat
+        endif
+    endif
+
+    return err
+end function
+
+##############################
+
+function scalar fcast_special_case(bundle *mod, scalar horizon, bool do_states)
+
+    # here we handle special cases by relying on ordinary (non-state space)
+    # inferential methods, eg ols
+
+    scalar err = 0
+    case = mod.special_case
+
+    matrix y = mod.depvar * mod.scale
+    scalar T = rows(y)
+    matrix e = {}
+    Th = T+horizon
+    matrix X = ones(Th,1)
+
+    if (case == 2) || (case==4)
+        matrix X ~= seq(1, Th)' - Th/2
+    endif
+
+    if (case == 3) || (case==4)
+        pd = mod.pd
+        matrix X ~= mlag(seq(1,Th)' % pd .= 1, seq(0,pd-2))
+    endif
+
+    matrix b = mols(y, X[1:T,], &e)
+    scalar v = meanc(e.^2)
+
+    matrix f = X[T+1:Th,]*b
+    matrix fv = v .* seq(1,horizon)'
+
+    mod.fcast = f
+    mod.fcastvar = fv
+
+    return err
+end function
+
+##########################
+
+function void fcast_printout(bundle model)
+
+    if !exists(model.fcast)
+        return
+    endif
+
+    matrix f = model.fcast
+    matrix s = sqrt(model.fcastvar)
+    string yname = model.depvarname
+    scalar h = rows(f)
+    printf "\nOut of sample forecast for %s\n\n", yname
+    printf "   horizon    forecast    std.err.\n\n"
+
+    loop i = 1 .. h 
+        printf "%10d%12.6g%12.6g\n", i, f[i], s[i]
+    endloop
+    print ""
+
+end function

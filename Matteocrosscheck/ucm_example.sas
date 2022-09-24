@@ -1,0 +1,12 @@
+ods pdf file="C:\Users\pelagatti\Google Drive\Jack\UCM_with_reg\ucm_example.pdf";
+proc ucm data=sasuser.ita_load_h8_2012_2015;
+	id DATE interval=day;
+	model H08 = HOLIDAY UNDER18_MI OVER18_MI COS1-COS16 SIN1-SIN16;
+	level plot=smooth;
+	season length=7 type=trigonometric;
+	irregular plot=smooth;
+	estimate back=28 plot=panel;
+	forecast back=28 lead=28 plot=decomp outfor=sasuser.load_h08;
+run;
+ods pdf close;
+ods html;

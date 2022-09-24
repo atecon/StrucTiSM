@@ -1,0 +1,63 @@
+
+Dear Sven,
+I attach the following files for the UCM with regressors example we discussed:
+
+- ita_load_h8_2021_2015.xslx    the data file with the following variables:
+DATE date of daily data
+H08 electric load (demand) for Italy at 8 in the moring
+TEMP_MI average daily temperature in Milan
+TEMP_RM average daily temperature in Rome
+HOLIDAY holiday dummy
+DayOfWeek number of day in the week (1=Mon, ...., 7=Sun)
+OVER18_MI = max(0, TEMP_MI - 18)
+UNDER18_MI = max(0, 18 - TEMP_MI)
+OVER18_RM = max(0, TEMP_RM - 18)
+UNDER18_RM = max(0, 18 - TEMP_RM)
+TIME time index
+cos1    cos2    cos3    cos4    cos5 cos6    cos7    cos8    cos9    cos10    cos11    cos12 cos13    cos14    cos15    cos16
+sin1    sin2    sin3    sin4    sin5 sin6    sin7    sin8    sin9    sin10    sin11    sin12 sin13    sin14    sin15    sin16
+cosines and sines of the time index at frequencies 2*pi/365 * j with j = 1, ..., 16
+
+- ucm_example.sas: text file with SAS code to estimate an UCM with
+dependent variable: H08
+components: random walk (level), trigonometric seasonal component with period 7 days, irregular component
+regressors: HOLIDAY UNDER18_MI OVER18_MI COS1-COS16 SIN1-SIN16
+estimation sample: whole sample excluding last 28 days
+forecast: last 28 days not used for estimation)
+
+- ucm_example.pdf: estimation output as pdf
+
+- output.xlsx: output as Excel file (much richer).
+
+If you need more information or output just let me know.
+
+Best,
+Matteo
+
+>
+> Am 15.10.2021 um 00:30 schrieb Matteo Pelagatti:
+>> Dear Sven,
+>> I am preparing an example using daily electricity load data, holiday
+>> dummies and temperatures. Can your package handle multiple seasonal
+>> components and trigonometric seasonal components in which only some
+>> harmonics are chosen?
+>>
+>> The PROC UCM model would be (it should be readable even if you do not
+>> know the syntax)
+>>> proc ucm data=sasuser.ita_load_h8_2012_2015;
+>>>     id DATE interval=day;
+>>>     model H08 = HOLIDAY UNDER18_MI OVER18_MI;
+>>>     level plot=smooth;
+>>>     season length=7 type=dummy;
+>>>     season length=365 type=trig keepharmonics=1 to 16 variance=0 noest
+>>> plot=smooth;
+>>>     irregular;
+>>>     estimate back=28 plot=panel;
+>>>     forecast back=28 lead=28 plot=decomp outfor=sasuser.load_h08;
+>>> run;
+>> However, if you can handle only the 7-day seasonality, I can make
+>> deterministic sinusoids for the 365-day seasonality.
+>> Best,
+>> Matteo
+>>
+>

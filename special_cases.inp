@@ -1,0 +1,133 @@
+function scalar check_for_special_cases(int trend, int slope, int seas)
+    ret = 0
+    # check for a few special cases that need no
+    # numerical optimisation
+
+    st_trend = (trend == 1)
+    st_slope = (slope == 1)
+    st_seas = (seas == 1) || (seas == 2)
+
+    if !(st_trend || st_slope || st_trend) 
+	if trend==2 && slope==0 && seas == 0
+	    # case 1: just a constant + irregular
+	    ret = 1
+	elif trend==2 && slope==2 && seas == 0
+	    # case 2: constant + trend + irregular
+	    ret = 2
+	elif trend==2 && slope==0 && seas == 3
+	    # case 3: constant + seasonal dummies + irregular
+	    ret = 3
+	elif trend==2 && slope==2 && seas == 3
+	    # case 4: constant + trend + seasonal dummies + irregular
+	    ret = 4
+	endif
+    endif
+    
+    return ret
+end function
+
+function matrix handle_special_case(int case, const matrix y, scalar pd)
+    T = rows(y)
+    X = ones(T, 1)
+    Tr = seq(1,T)'
+    matrix e = {}
+    if (case == 2) || (case == 4)
+	X ~= Tr
+    endif
+    if (case == 3) || (case == 4)
+	seas = (Tr % pd) .= seq(1,pd-1)
+	X ~= seas - (1/pd)
+    endif
+
+    Pi = mols(y, X, &e)
+
+    if case == 1
+	state = X*Pi
+    elif case == 2
+	state = X[,1:2]*Pi[1:2] 
+	state = state ~ mshape(Pi[2], T, 1)
+    elif case == 3
+	state = mshape(Pi[1], T, 1) ~ X[,2:] * Pi[2:]
+    elif case == 4
+	state = X[,1:2]*Pi[1:2] 
+	state = state ~ mshape(Pi[2], T, 1)
+	state = state ~ X[,3:] * Pi[3:]
+    endif
+
+    return e ~ state
+end function
+
+function scalar add_states_special(matrix St, bundle *model)
+
+    case = model.special_case
+    strings compnames = null
+    strings compdescs = null
+    scalar ini = model.ini
+    scalar fin = model.fin
+    smpl ini fin
+
+    # "name" holds the outer name of the dependent variable
+    name = model.depvarname
+    nStates = cols(St) - 1
+    pd = model.pd
+
+    # do the irregular component --------------------------
+    sername = name ~ "_irreg"
+    genseries(sername, St[,1])
+    compnames += sername
+    compdescs += "Irregular"
+    model[sername] = @sername
+      
+    # do the level ---------------------------------------------
+    string sername = name ~ "_level"
+    genseries(sername, St[,2])
+    compnames += sername
+    compdescs += "Trend level"
+    model[sername] = @sername
+    
+    scalar k = 2
+    # do the slope, if present ---------------------------------
+    if (case==2) || (case == 4)
+	k++
+        sername = name ~ "_slope" 
+        genseries(sername, St[,k])
+        compnames += sername
+        compdescs += "Slope"
+	model[sername] = @sername
+    endif
+ 
+    # do the seasonal, if present ------------------------------
+    if (case==3) || (case == 4)
+	k++
+	# printf "(seasonal) k = %d\n", k
+        sername = name ~ "_seas"
+        genseries(sername, St[,k])
+        compnames += sername 
+        compdescs += "Seasonal (deterministic)"
+	model[sername] = @sername
+    endif
+
+    # do the exogenous component, if present ---------------------
+    if 0 # not for now
+	k++
+	nVar = model.nVar
+        sername = name ~ "_exo"
+	
+	beta = model.coeff[has_eps + model.nVar + 1:]
+        genseries(sername, model.mX * beta)
+        compnames += sername 
+	compdescs += "Exogenous"
+	model[sername] = @sername
+        if has_eps
+            series eps -= @sername
+        endif
+    endif
+    
+    # Add the names of the newly created series to the bundle
+    strings model.compnames = compnames
+    strings model.compdescs = compdescs
+
+    model.stSE = mshape(NA,fin-ini+1, k)
+    return k
+end function
+

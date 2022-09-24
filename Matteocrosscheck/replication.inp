@@ -1,0 +1,27 @@
+# Test script for replicating Matteo Pellagatti's example 
+# of forecasting with exogenous regressors 
+
+set verbose off
+include StrucTiSM.gfn 
+
+open ita_load_h8_2012_2015.gdt --quiet
+
+list cosines = cos1 .. cos16 
+list sines   = sin1 .. sin16 
+list reg     = HOLIDAY UNDER18_MI OVER18_MI cosines sines
+
+fcast_smpl_len = 28
+
+# estimation sample, leave last 28 days for forecasting  
+smpl ; -fcast_smpl_len
+
+# the following hopefully sets up a plain random walk
+# component, and then stochastic trigonometric terms
+# plus the exogenous terms 
+ 
+bundle fexo = STSM_setup(H08, TRUE, 1, 0, 1, reg)
+
+STSM_estimate(&fexo)
+
+smpl --full
+STSM_fcast(&fexo, fcast_smpl_len)
