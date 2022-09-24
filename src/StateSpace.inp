@@ -1,4 +1,15 @@
-function matrix Rmat(int trend, int slope, int seas, int pd)
+function void prepare_system_matrices (bundle *self)
+    /* Call functions preparing various system matrices. */
+
+    if self.special_case_id
+        matrices self.SysMat = array(0)
+    else
+        matrices self.SysMat = InitSystemMats(&self)
+    endif
+end function
+
+
+function matrix Qmat(int trend, int slope, int seas, int pd)
     # this function returns a matrix mapping the stochastic shocks into the
     # state transition variance matrix: it has as many rows as the dimension
     # of the state vector and as many columns as the number of variances
@@ -53,17 +64,31 @@ function matrix Fseas(bool trig, scalar pd)
         endif
     else
         # BSM transition matrix with dummy seasonals:
-        ret = -ones(1, $pd-1) | (I($pd-2) ~ 0)
+        ret = -ones(1, pd-1) | (I(pd-2) ~ 0)
     endif
+
     return ret
 end function
 
-function matrix Fmat(int slope, int seasonal, scalar pd)
-    matrix ret = slope ? { 1, 1; 0, 1 } : {1} # trend component
+function matrix Tmat(int slope, int seasonal, scalar pd)
+    /* Compile the transition matrix T. */
+
+    if slope
+        ret = {1, 1; 0, 1}  # random-walk in beta
+    else
+        ret = {1}
+        #ret = {1, 0; 0, 0}  # only random-walk in mu
+    endif
+    ret
     if seasonal
         # seasonal component: 1 = trigonometric 2,3 = dummy
-        ret = diagcat(ret, Fseas(seasonal==1, pd))
+        seas1 = Fseas(seasonal == 1, pd)
+        ret = diagcat(ret, seas1)
+        # FIXME: remove seas2
+        #seas2 = Fseas(seasonal == 1, 365)
+        #ret = diagcat(ret, seas2)
     endif
+
     return ret
 end function
 
@@ -72,32 +97,33 @@ function matrices InitSystemMats(int trend, int slope, int seasonal,
                                  scalar *nStates, scalar *nVar)
 
     matrices ret = array(3)
-    # in this order: F (statemat), R (uset for statevar)
-    # H (obsmat)
+    # in this order: T (statemat), Q (used for statevar)
+    # Z (obsmat)
 
     # Transition equation
-    matrix ret[1] = Fmat(slope, seasonal, $pd)
+    matrix ret[1] = Tmat(slope, seasonal, $pd)
     nStates = rows(ret[1]) # size of state vector
     
-    # square matrix of var:
-    matrix ret[2] = Rmat(trend, slope, seasonal, $pd)
+    # Square matrix of variance
+    matrix ret[2] = Qmat(trend, slope, seasonal, $pd)
     nVar = cols(ret[2])
 
     # measurement equation: matrix of the state vector
-    matrix H = (slope) ? { 1; 0 } : {1} # trend component
+    matrix Z = (slope) ? { 1; 0 } : {1}     # trend component
+
     if seasonal == 1  # stochastic trigonometric terms
-        H = H | mshape({1,0}, $pd - 1, 1)
+        Z |= mshape({1,0}, $pd - 1, 1)
     elif seasonal > 1 # dummy variables (stochastic and deterministic)
-        H = H | 1 | zeros($pd-2, 1)
+        Z |= 1 | zeros($pd-2, 1)
     endif
-    ret[3] = H
+    ret[3] = Z
 
     if rows(ret[2]) != nStates
         # sanity check
         printf "Mismatch! (nStates = %d)\n", nStates
         printf "statemat:\n%5.1f\n", ret[1]
         printf "R:\n%5.1f\n", ret[2]
-        printf "obsmat:\n%5.1f\n", H
+        printf "obsmat:\n%5.1f\n", Z
     endif
 
     return ret

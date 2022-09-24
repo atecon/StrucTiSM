@@ -2,7 +2,7 @@
 # set_horizon
 # reparm
 # inject
-# maybe_scale_depvar
+# scale_series
 # adjust
 # parlabels
 # specification
@@ -12,6 +12,94 @@
 
 
 ####################
+
+
+function bundle default_model_bundle (void)
+    /* Compile the default bundle holding model parameters */
+
+    bundle self = null
+
+    scalar self.err = FALSE
+    scalar self.verbose = FALSE
+    scalar self.error_in_obseq = TRUE          # formerly "epsilon"
+    string self.type_trend = "deterministic"   # {"stochastic" "deterministic"}
+    string self.type_slope = "none"  # {"none" "stochastic" "deterministic"}
+    scalar self.pd = $pd
+
+    bundle self.seasonal = null
+    bundle self.seasonal.component_1 = null
+    scalar self.seasonal.component_1.stochastic = FALSE
+    string self.seasonal.component_1.type = "dummy"    # {"dummy", "trigonometric"}
+    scalar self.seasonal.component_1.frequency = $pd
+
+    scalar self.nStates = NA
+    scalar self.nVar = NA       # number of variances to estimate
+    scalar self.y_scaling_factor = NA
+
+    return self
+end function
+
+
+function void check_seasonality (bundle *self)
+    /* Check if dataset has seasonality. If not, reset seasonal bundle. */
+
+    if nelem(self.seasonal.component_1) > 0 && ($pd == 1)
+        print "The dataset has no seasonality. Specified seasonality will be ignored."
+        self.seasonal.component_1 = null
+    endif
+end function
+
+
+function bundle get_sample_details (const series y, const list xlist[null])
+    /* Get sample start and end.
+    return: bundle, holding index of start and end date */
+
+    bundle self
+
+    list Z = y xlist
+    series okobs = zeromiss(ok(Z))
+    scalar self.sample_start_index = xmax(firstobs(okobs), $t1)
+    scalar self.sample_end_index = xmin(lastobs(okobs), $t2)
+
+
+    return self
+end function
+
+function string get_sample_string (const int start_index,
+                                   const int end_index)
+    return sprintf("%s - %s", obslabel(start_index), obslabel(end_index))
+end function
+
+
+function scalar stochastic_season_exists (const bundle self)
+    /* code description
+    return: type, description */
+
+    scalar ret = 0
+    strings components = getkeys(self.seasonal)
+
+    loop foreach i components
+        if self.seasonal["$i"].type == "stochastic"
+            ret++
+        endif
+    endloop
+
+    return (ret > 0) ? TRUE : FALSE
+end function
+
+
+function void get_xlist_details (list xlist, bundle *self)
+    /* Add some details about xlist to bundle. */
+
+    scalar self.nexog = nelem(xlist)
+
+    if self.nexog
+        list self.xlist = xlist
+        string self.xnames = varname(xlist)
+        matrix self.mX = {xlist}
+    endif
+end function
+
 
 function scalar set_horizon(void)
     # some sensible defaults
@@ -82,13 +170,18 @@ function scalar inject(matrix theta, bundle *kmod, bool eps,
     return err
 end function
 
-function series maybe_scale_depvar( series y, scalar *scale, bool verbosely[0])
-    # for now
-    scale = sd(y) / 100
-    ret = y / scale
-    if verbosely
-        printf "scale for dependent variable = %g\n", scale
+function series scale_series (const series y,
+                              bundle *self)
+    # TODO: For now
+
+    self.y_scaling_factor = sd(y) / 100
+    series ret = y / self.y_scaling_factor
+
+    if self.verbose
+        printf "Info: Scale for dependent variable = %g\n",\
+            self.y_scaling_factor
     endif
+
     return ret
 end function
 

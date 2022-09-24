@@ -167,76 +167,40 @@ endif
 </code>
 </gretl-function>
 <gretl-function name="STSM_setup" type="bundle">
- <params count="6">
-  <param name="y" type="series">
+ <params count="3">
+  <param name="y" type="series" const="true">
 <description>Dependent variable</description>
   </param>
-  <param name="epsilon" type="bool" default="1">
-<description>error in obs. eq</description>
-  </param>
-  <param name="trend" type="int" min="1" max="2" default="1">
-<description>Trend</description>
-<labels count="2">
-"stochastic" "deterministic" </labels>
-  </param>
-  <param name="slope" type="int" min="0" max="2" default="1">
-<description>Slope</description>
-<labels count="3">
-"none" "stochastic" "deterministic" </labels>
-  </param>
-  <param name="seasonal" type="int" min="0" max="3" default="0">
-<description>Seasonal</description>
-<labels count="4">
-"none" "stochastic with trigonometric terms" "stochastic with dummies" "deterministic dummies" </labels>
-  </param>
-  <param name="X" type="list" optional="true">
-<description>Exogenous variables</description>
-  </param>
+  <param name="model" type="bundle" const="true"/>
+  <param name="xlist" type="list" optional="true"/>
  </params>
-<code>set skip_missing off
-bundle tmp = defbundle(&quot;epsilon&quot;, epsilon, &quot;trend&quot;, trend, &quot;slope&quot;, slope, &quot;seasonal&quot;, seasonal, &quot;err&quot;, 0)
-# --- check if the model makes sense -------------------------
-errorif( seasonal &amp;&amp; ($pd == 1), &quot;cannot add seasonals for periodicity 1&quot;)
-# tmp.err = 10 # E_PDWRONG
-# return tmp
-# endif
-# get dep var name (and catch the anonymous case)
-string name = !strlen(argname(y)) ? &quot;Y&quot; : argname(y)
-# if strlen(name) == 0 # anonymous generated series
-#     name = &quot;Y&quot;
-# endif
-X -= const # just in case
-scalar nexog = nelem(X)
-# --- set the sample sensibly --------------------------------
-list Z = y X
-okobs = zeromiss(ok(Z))
-ini = xmax(firstobs(okobs), $t1)
-fin = xmin(lastobs(okobs), $t2)
-errorif( fin == ini, &quot;no effective observations available&quot;)
-# tmp.err = 45 # E_TOOFEW
-#    return tmp
-# endif
-smpl ini fin
-smplstr = sprintf(&quot;%s - %s&quot;, obslabel(ini), obslabel(fin))
-# ------------------------------------------------------------
-scalar nStates = NA
-scalar nVar = NA # number of variances to estimate
-scalar scale = NA
-series scaled_y = maybe_scale_depvar(y, &amp;scale)
-# intercept special cases first
-spcase = check_for_special_cases(trend, slope, seasonal)
-if spcase
-  matrices SysMat = array(0)
+<code>/* Main function for setting up the model. */
+set skip_missing off
+bundle self = default_model_bundle()
+if exists(model)
+  self = self + model
+endif
+check_seasonality(&amp;self)
+scalar self.n_seasonal_components = nelem(getkeys(self.seasonal))
+string self.depvarname = !strlen(argname(y)) ? &quot;Y&quot; : argname(y)
+xlist -= const # just in case
+self = self + get_sample_details(y, xlist)
+errorif(self.sample_start_index == self.sample_end_index, &quot;No effective observations available&quot;)
+smpl self.sample_start_index self.sample_end_index
+self.T = self.sample_end_index - self.sample_start_index + 1
+self.sample_string = get_sample_string(self.sample_start_index, self.sample_end_index)
+matrix self.depvar = {scale_series(y, &amp;self)}
+get_xlist_details(xlist, &amp;self)
+print self
+stop
+self.special_case_id = get_special_case_id(self)
+if self.special_case_id
+  matrices self.SysMat = array(0)
 else
-  matrices SysMat = InitSystemMats(trend, slope, seasonal, &amp;nStates, &amp;nVar)
+  matrices self.SysMat = InitSystemMats(&amp;self)
+  # trend, slope, seasonal, &amp;nStates, &amp;nVar)
 endif
-bundle tmp = tmp + defbundle(&quot;depvar&quot;, {scaled_y}, &quot;depvarname&quot;, name, &quot;ini&quot;, ini, &quot;fin&quot;, fin, &quot;smplstr&quot;, smplstr, &quot;pd&quot;, $pd, &quot;scale&quot;, scale, &quot;nStates&quot;, nStates, &quot;nVar&quot;, nVar, &quot;T&quot;, fin - ini + 1, &quot;nexog&quot;, nexog, &quot;SysMat&quot;, SysMat, &quot;special_case&quot;, spcase)
-if nexog &gt; 0
-  list   tmp.X = X	# only needed for forecasting
-  string tmp.xnames = varname(X)
-  matrix tmp.mX = {X}
-endif
-return tmp
+return self
 </code>
 </gretl-function>
 <gretl-function name="STSM_estimate" type="scalar">
@@ -260,8 +224,8 @@ nexog   = mod.nexog
 has_exog = (nexog &gt; 0)
 mod.mapping = mapping
 if mod.special_case
-  matrix spcase = handle_special_case(mod.special_case, mod.depvar, mod.pd)
-  St = spcase * scale
+  matrix self.special_case_id = handle_special_case(mod.special_case, mod.depvar, mod.pd)
+  St = self.special_case_id * scale
   add_states_special(St, &amp;mod)
   if verbose
     STSM_printout(&amp;mod)
@@ -359,8 +323,8 @@ return 0
  <params count="1">
   <param name="model" type="bundleref"/>
  </params>
-<code>string name = model.depvarname
-string sample = model.smplstr
+<code>string depvar = model.depvarname
+string sample = model.sample_string
 scalar scale = model.scale
 scalar mapping = model.mapping
 has_eps = model.epsilon
@@ -372,7 +336,7 @@ strings plabs = parlabels(has_eps, trend, slope, seasonal, has_exog)
 if model.nexog &gt; 0
   plabs += strsplit(strsub(model.xnames,&quot;,&quot;,&quot; &quot;))
 endif
-printf &quot;\nStructural model for %s, %s (T = %d)\n&quot;, name, sample, sum(ok(model.depvar))
+printf &quot;\nStructural model for %s, %s (T = %d)\n&quot;, depvar, sample, sum(ok(model.depvar))
 if model.special_case
   printf &quot;Estimation carried out via OLS.&quot;
 else
@@ -402,13 +366,13 @@ cd = mod.compdescs
 n = nelem(cn)
 m = cols(mod.stSE)
 loop i = 1 .. n --quiet
-  name = cn[i]
+  depvar = cn[i]
   desc = cd[i]
-  comp += genseries(name, mod[name])
-  setinfo @name --description=&quot;@desc&quot;
+  comp += genseries(depvar, mod[depvar])
+  setinfo @depvar --description=&quot;@desc&quot;
   if stderrs &amp;&amp; !mod.special_case &amp;&amp;(i&lt;=m) # don't do irregular &amp; exog
-    comp += genseries(name ~ &quot;_se&quot;, mod.stSE[,i])
-    setinfo @name --description=&quot;@desc (s.e.)&quot;
+    comp += genseries(depvar ~ &quot;_se&quot;, mod.stSE[,i])
+    setinfo @depvar --description=&quot;@desc (s.e.)&quot;
   endif
 endloop
 return comp
@@ -559,7 +523,7 @@ endif
 return ret
 </code>
 </gretl-function>
-<gretl-function name="Rmat" type="matrix" private="1">
+<gretl-function name="Qmat" type="matrix" private="1">
  <params count="4">
   <param name="trend" type="int"/>
   <param name="slope" type="int"/>
@@ -615,21 +579,32 @@ return selifc(ret, maxc(ret) .&gt; 0)
   endif
 else
   # BSM transition matrix with dummy seasonals:
-  ret = -ones(1, $pd-1) | (I($pd-2) ~ 0)
+  ret = -ones(1, pd-1) | (I(pd-2) ~ 0)
 endif
 return ret
 </code>
 </gretl-function>
-<gretl-function name="Fmat" type="matrix" private="1">
+<gretl-function name="Tmat" type="matrix" private="1">
  <params count="3">
   <param name="slope" type="int"/>
   <param name="seasonal" type="int"/>
   <param name="pd" type="scalar"/>
  </params>
-<code>matrix ret = slope ? { 1, 1; 0, 1 } : {1} # trend component
+<code>/* Compile the transition matrix T. */
+if slope
+  ret = {1, 1; 0, 1}  # random-walk in beta
+else
+  ret = {1}
+  #ret = {1, 0; 0, 0}  # only random-walk in mu
+endif
+ret
 if seasonal
   # seasonal component: 1 = trigonometric 2,3 = dummy
-  ret = diagcat(ret, Fseas(seasonal==1, pd))
+  seas1 = Fseas(seasonal == 1, pd)
+  ret = diagcat(ret, seas1)
+  # FIXME: remove seas2
+  #seas2 = Fseas(seasonal == 1, 365)
+  #ret = diagcat(ret, seas2)
 endif
 return ret
 </code>
@@ -643,30 +618,114 @@ return ret
   <param name="nVar" type="scalarref"/>
  </params>
 <code>matrices ret = array(3)
-# in this order: F (statemat), R (uset for statevar)
-# H (obsmat)
+# in this order: T (statemat), Q (used for statevar)
+# Z (obsmat)
 # Transition equation
-matrix ret[1] = Fmat(slope, seasonal, $pd)
+matrix ret[1] = Tmat(slope, seasonal, $pd)
 nStates = rows(ret[1]) # size of state vector
-# square matrix of var:
-matrix ret[2] = Rmat(trend, slope, seasonal, $pd)
+# Square matrix of variance
+matrix ret[2] = Qmat(trend, slope, seasonal, $pd)
 nVar = cols(ret[2])
 # measurement equation: matrix of the state vector
-matrix H = (slope) ? { 1; 0 } : {1} # trend component
+matrix Z = (slope) ? { 1; 0 } : {1}     # trend component
 if seasonal == 1  # stochastic trigonometric terms
-  H = H | mshape({1,0}, $pd - 1, 1)
+  Z |= mshape({1,0}, $pd - 1, 1)
 elif seasonal &gt; 1 # dummy variables (stochastic and deterministic)
-  H = H | 1 | zeros($pd-2, 1)
+  Z |= 1 | zeros($pd-2, 1)
 endif
-ret[3] = H
+ret[3] = Z
 if rows(ret[2]) != nStates
   # sanity check
   printf &quot;Mismatch! (nStates = %d)\n&quot;, nStates
   printf &quot;statemat:\n%5.1f\n&quot;, ret[1]
   printf &quot;R:\n%5.1f\n&quot;, ret[2]
-  printf &quot;obsmat:\n%5.1f\n&quot;, H
+  printf &quot;obsmat:\n%5.1f\n&quot;, Z
 endif
 return ret
+</code>
+</gretl-function>
+<gretl-function name="default_model_bundle" type="bundle" private="1">
+<code>/* Compile the default bundle holding model parameters */
+bundle self = null
+scalar self.err = FALSE
+scalar self.verbose = FALSE
+scalar self.error_in_obseq = TRUE          # formerly &quot;epsilon&quot;
+string self.type_trend = &quot;deterministic&quot;   # {&quot;stochastic&quot; &quot;deterministic&quot;}
+string self.type_slope = &quot;none&quot;  # {&quot;none&quot; &quot;stochastic&quot; &quot;deterministic&quot;}
+scalar self.pd = $pd
+bundle self.seasonal = null
+bundle self.seasonal.component_1 = null
+scalar self.seasonal.component_1.stochastic = FALSE
+string self.seasonal.component_1.type = &quot;dummy&quot;    # {&quot;dummy&quot;, &quot;trigonometric&quot;}
+scalar self.seasonal.component_1.frequency = $pd
+scalar self.nStates = NA
+scalar self.nVar = NA       # number of variances to estimate
+scalar self.y_scaling_factor = NA
+return self
+</code>
+</gretl-function>
+<gretl-function name="check_seasonality" type="void" private="1">
+ <params count="1">
+  <param name="self" type="bundleref"/>
+ </params>
+<code>/* Check if dataset has seasonality. If not, reset seasonal bundle. */
+if nelem(self.seasonal.component_1) &gt; 0 &amp;&amp; ($pd == 1)
+  print &quot;The dataset has no seasonality. Specified seasonality will be ignored.&quot;
+  self.seasonal.component_1 = null
+endif
+</code>
+</gretl-function>
+<gretl-function name="get_sample_details" type="bundle" private="1">
+ <params count="2">
+  <param name="y" type="series" const="true"/>
+  <param name="xlist" type="list" optional="true" const="true"/>
+ </params>
+<code>/* Get sample start and end.
+return: bundle, holding index of start and end date */
+bundle self
+list Z = y xlist
+series okobs = zeromiss(ok(Z))
+scalar self.sample_start_index = xmax(firstobs(okobs), $t1)
+scalar self.sample_end_index = xmin(lastobs(okobs), $t2)
+return self
+</code>
+</gretl-function>
+<gretl-function name="get_sample_string" type="string" private="1">
+ <params count="2">
+  <param name="start_index" type="int" const="true"/>
+  <param name="end_index" type="int" const="true"/>
+ </params>
+<code>return sprintf(&quot;%s - %s&quot;, obslabel(start_index), obslabel(end_index))
+</code>
+</gretl-function>
+<gretl-function name="stochastic_season_exists" type="scalar" private="1">
+ <params count="1">
+  <param name="self" type="bundle" const="true"/>
+ </params>
+<code>/* code description
+return: type, description */
+scalar ret = 0
+strings components = getkeys(self.seasonal)
+loop foreach i components
+  if self.seasonal[&quot;$i&quot;].type == &quot;stochastic&quot;
+    ret++
+  endif
+endloop
+return (ret &gt; 0) ? TRUE : FALSE
+</code>
+</gretl-function>
+<gretl-function name="get_xlist_details" type="void" private="1">
+ <params count="2">
+  <param name="xlist" type="list"/>
+  <param name="self" type="bundleref"/>
+ </params>
+<code>/* Add some details about xlist to bundle. */
+scalar self.nexog = nelem(xlist)
+if self.nexog
+  list self.xlist = xlist
+  string self.xnames = varname(xlist)
+  matrix self.mX = {xlist}
+endif
 </code>
 </gretl-function>
 <gretl-function name="set_horizon" type="scalar" private="1">
@@ -736,17 +795,16 @@ endif
 return err
 </code>
 </gretl-function>
-<gretl-function name="maybe_scale_depvar" type="series" private="1">
- <params count="3">
-  <param name="y" type="series"/>
-  <param name="scale" type="scalarref"/>
-  <param name="verbosely" type="bool" default="0"/>
+<gretl-function name="scale_series" type="series" private="1">
+ <params count="2">
+  <param name="y" type="series" const="true"/>
+  <param name="self" type="bundleref"/>
  </params>
-<code># for now
-scale = sd(y) / 100
-ret = y / scale
-if verbosely
-  printf &quot;scale for dependent variable = %g\n&quot;, scale
+<code># TODO: For now
+self.y_scaling_factor = sd(y) / 100
+series ret = y / self.y_scaling_factor
+if self.verbose
+  printf &quot;Info: Scale for dependent variable = %g\n&quot;, self.y_scaling_factor
 endif
 return ret
 </code>
@@ -983,29 +1041,26 @@ matrix ret = P'(X ** X) * Q
 return ret
 </code>
 </gretl-function>
-<gretl-function name="check_for_special_cases" type="scalar" private="1">
- <params count="3">
-  <param name="trend" type="int"/>
-  <param name="slope" type="int"/>
-  <param name="seas" type="int"/>
+<gretl-function name="get_special_case_id" type="scalar" private="1">
+ <params count="1">
+  <param name="self" type="bundle" const="true"/>
  </params>
-<code>ret = 0
-# check for a few special cases that need no
-# numerical optimisation
-st_trend = (trend == 1)
-st_slope = (slope == 1)
-st_seas = (seas == 1) || (seas == 2)
-if !(st_trend || st_slope || st_trend)
-  if trend==2 &amp;&amp; slope==0 &amp;&amp; seas == 0
+<code>/* Check for a few special cases that need no numerical optimisation */
+scalar ret = 0
+stochastic_trend = (self.type_trend == &quot;stochastic&quot;)
+stochastic_slope = (self.type_slope == &quot;stochastic&quot;)
+stochastic_season = stochastic_season_exists(self)
+if !(stochastic_trend || stochastic_slope || stochastic_trend)
+  if self.type_trend == &quot;deterministic&quot; &amp;&amp; self.type_slope == &quot;none&quot; &amp;&amp; self.n_seasonal_components == 0
     # case 1: just a constant + irregular
     ret = 1
-  elif trend==2 &amp;&amp; slope==2 &amp;&amp; seas == 0
+  elif self.type_trend == &quot;deterministic&quot; &amp;&amp; self.type_slope == &quot;deterministic&quot; &amp;&amp; self.n_seasonal_components == 0
     # case 2: constant + trend + irregular
     ret = 2
-  elif trend==2 &amp;&amp; slope==0 &amp;&amp; seas == 3
+  elif self.type_trend == &quot;deterministic&quot; &amp;&amp; self.type_slope == &quot;none&quot; &amp;&amp; stochastic_season == FALSE
     # case 3: constant + seasonal dummies + irregular
     ret = 3
-  elif trend==2 &amp;&amp; slope==2 &amp;&amp; seas == 3
+  elif self.type_trend == &quot;deterministic&quot; &amp;&amp; self.type_slope == &quot;deterministic&quot; &amp;&amp; stochastic_season == FALSE
     # case 4: constant + trend + seasonal dummies + irregular
     ret = 4
   endif
@@ -1290,7 +1345,7 @@ gnuplot --input=@fname --output=display
 set verbose off
 include StrucTiSM.gfn
 
-scalar example = 7 # choose an example, from 1 to 7; -1 means &quot;all&quot;
+scalar example = 2 # choose an example, from 1 to 7; -1 means &quot;all&quot;
 scalar k = 1
 bundle SSmod = null
 
@@ -1307,10 +1362,13 @@ if example == k || example == -1
     ## trend = 1
     ## slope = 0
     ## seasonal = 0
-    #
-    # beaten to death in the JSS special issue (2011)
 
-    model = STSM_setup(nile, 1, 1, 0, 0)
+    epsilon = TRUE
+    trend = 1
+    slope = 0
+    seasonal = 0
+
+    model = STSM_setup(nile, epsilon, trend, slope, seasonal)
     scalar err = STSM_estimate(&amp;model)
     list comps = STSM_components(model)
     series level_se = model.stSE[,1]
@@ -1325,6 +1383,19 @@ k++
 ###
 
 if example == k || example == -1
+    open bikesharing.gdt --quiet --preserve
+
+    bundle self = _(error_in_obseq = TRUE,\
+                    type_trend = &quot;stochastic&quot;)
+
+    model = STSM_setup(cnt, self)
+    scalar err = STSM_estimate(&amp;model)
+    list comps = STSM_components(model)
+    scatters cnt comps --with-lines --output=display
+endif
+k++
+
+if example == k || example == -1
     open australia.gdt --quiet --preserve
 
     # this is the &quot;Local Linear Trend Model&quot;; it corresponds to
@@ -1336,7 +1407,12 @@ if example == k || example == -1
     #
     # the example is the same as in Ignacio's LLTestim sample script
 
-    model = STSM_setup(IAU)
+    epsilon = TRUE
+    trend = 1
+    slope = 0
+    seasonal = 1
+
+    model = STSM_setup(IAU, epsilon, trend, slope, seasonal)
     scalar err = STSM_estimate(&amp;model)
     list comps = STSM_components(model)
     scatters IAU comps --with-lines --output=display

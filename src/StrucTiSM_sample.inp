@@ -1,7 +1,7 @@
 set verbose off
 include StrucTiSM.gfn
 
-scalar example = 7 # choose an example, from 1 to 7; -1 means "all"
+scalar example = 2 # choose an example, from 1 to 7; -1 means "all"
 scalar k = 1
 bundle SSmod = null
 
@@ -18,10 +18,13 @@ if example == k || example == -1
     ## trend = 1
     ## slope = 0
     ## seasonal = 0
-    #
-    # beaten to death in the JSS special issue (2011)
 
-    model = STSM_setup(nile, 1, 1, 0, 0)
+    epsilon = TRUE
+    trend = 1
+    slope = 0
+    seasonal = 0
+
+    model = STSM_setup(nile, epsilon, trend, slope, seasonal)
     scalar err = STSM_estimate(&model)
     list comps = STSM_components(model)
     series level_se = model.stSE[,1]
@@ -36,6 +39,19 @@ k++
 ###
 
 if example == k || example == -1
+    open bikesharing.gdt --quiet --preserve
+
+    bundle self = _(error_in_obseq = TRUE,\
+                    type_trend = "stochastic")
+
+    model = STSM_setup(cnt, self)
+    scalar err = STSM_estimate(&model)
+    list comps = STSM_components(model)
+    scatters cnt comps --with-lines --output=display
+endif
+k++
+
+if example == k || example == -1
     open australia.gdt --quiet --preserve
 
     # this is the "Local Linear Trend Model"; it corresponds to
@@ -47,7 +63,12 @@ if example == k || example == -1
     #
     # the example is the same as in Ignacio's LLTestim sample script
 
-    model = STSM_setup(IAU)
+    epsilon = TRUE
+    trend = 1
+    slope = 0
+    seasonal = 1
+
+    model = STSM_setup(IAU, epsilon, trend, slope, seasonal)
     scalar err = STSM_estimate(&model)
     list comps = STSM_components(model)
     scatters IAU comps --with-lines --output=display

@@ -13,78 +13,43 @@ include StrucTiSM_GUI.inp
 # LLT
 # BSM
 
-function bundle STSM_setup (series y "Dependent variable",
-                            bool epsilon[1]     "error in obs. eq",
-                            int trend[1:2:1]    "Trend"    {"stochastic" "deterministic"},
-                            int slope[0:2:1]    "Slope"    {"none" "stochastic" "deterministic"},
-                            int seasonal[0:3:0] "Seasonal" {"none" "stochastic with trigonometric terms" \
-                            "stochastic with dummies" "deterministic dummies"},
-                            list X[null] "Exogenous variables")
+function bundle STSM_setup (const series y "Dependent variable",
+                            const bundle model,
+                            list xlist[null])
+    /* Main function for setting up the model. */
 
     set skip_missing off
-    bundle tmp = defbundle("epsilon", epsilon, "trend", trend, "slope",
-      slope, "seasonal", seasonal, "err", 0)
 
-    # --- check if the model makes sense -------------------------
-    errorif( seasonal && ($pd == 1), "cannot add seasonals for periodicity 1")
-        # tmp.err = 10 # E_PDWRONG
-        # return tmp
-    # endif
-
-    # get dep var name (and catch the anonymous case)
-    string name = !strlen(argname(y)) ? "Y" : argname(y)
-    # if strlen(name) == 0 # anonymous generated series
-    #     name = "Y"
-    # endif
-
-    X -= const # just in case
-    scalar nexog = nelem(X)
-
-    # --- set the sample sensibly --------------------------------
-    list Z = y X
-    okobs = zeromiss(ok(Z))
-
-    ini = xmax(firstobs(okobs), $t1)
-    fin = xmin(lastobs(okobs), $t2)
-
-    errorif( fin == ini, "no effective observations available")
-    # tmp.err = 45 # E_TOOFEW
-    #    return tmp
-    # endif
-
-    smpl ini fin
-    smplstr = sprintf("%s - %s", obslabel(ini), obslabel(fin))
-    # ------------------------------------------------------------
-
-    scalar nStates = NA
-    scalar nVar = NA # number of variances to estimate
-    scalar scale = NA
-    series scaled_y = maybe_scale_depvar(y, &scale)
-
-    # intercept special cases first
-    spcase = check_for_special_cases(trend, slope, seasonal)
-    if spcase
-        matrices SysMat = array(0)
-    else
-        matrices SysMat = InitSystemMats(trend, slope, seasonal, &nStates, &nVar)
+    bundle self = default_model_bundle()
+    if exists(model)
+        self = self + model
     endif
 
-    bundle tmp = tmp + defbundle("depvar", {scaled_y}, "depvarname", name,
-      "ini", ini, "fin", fin, "smplstr", smplstr,
-      "pd", $pd, "scale", scale,
-      "nStates", nStates, "nVar", nVar,
-      "T", fin - ini + 1,
-      "nexog", nexog, "SysMat", SysMat,
-      "special_case", spcase)
+    check_seasonality(&self)
+    scalar self.n_seasonal_components = nelem(getkeys(self.seasonal))
 
-    if nexog > 0
-        list   tmp.X = X	# only needed for forecasting	
-        string tmp.xnames = varname(X)
-        matrix tmp.mX = {X}
-    endif
+    string self.depvarname = !strlen(argname(y)) ? "Y" : argname(y)
+    xlist -= const # just in case
 
-    return tmp
+    self = self + get_sample_details(y, xlist)
+    errorif(self.sample_start_index == self.sample_end_index,\
+            "No effective observations available")
 
+    smpl self.sample_start_index self.sample_end_index
+    self.T = self.sample_end_index - self.sample_start_index + 1
+
+    self.sample_string = get_sample_string(self.sample_start_index,
+                                           self.sample_end_index)
+
+    matrix self.depvar = {scale_series(y, &self)}
+    get_xlist_details(xlist, &self)
+
+    self.special_case_id = get_special_case_id(self)
+
+    *** HIER WEITERMACHEN ***
+    prepare_system_matrices(&self)
+
+    return self
 end function
 
 ###############################
@@ -111,9 +76,9 @@ function scalar STSM_estimate (bundle *mod, int verbose[0:3:1],
     mod.mapping = mapping
 
     if mod.special_case
-        matrix spcase = handle_special_case(mod.special_case,
+        matrix self.special_case_id = handle_special_case(mod.special_case,
           mod.depvar, mod.pd)
-        St = spcase * scale
+        St = self.special_case_id * scale
         add_states_special(St, &mod)
         if verbose
             STSM_printout(&mod)
@@ -357,8 +322,8 @@ end function
 
 function void STSM_printout(bundle *model)
 
-    string name = model.depvarname
-    string sample = model.smplstr
+    string depvar = model.depvarname
+    string sample = model.sample_string
     scalar scale = model.scale
     scalar mapping = model.mapping
     has_eps = model.epsilon
@@ -372,7 +337,7 @@ function void STSM_printout(bundle *model)
         plabs += strsplit(strsub(model.xnames,","," "))
     endif
 
-    printf "\nStructural model for %s, %s (T = %d)\n", name, sample,
+    printf "\nStructural model for %s, %s (T = %d)\n", depvar, sample,
       sum(ok(model.depvar))
 
     if model.special_case
@@ -409,13 +374,13 @@ function list STSM_components(bundle mod, bool stderrs[0])
     n = nelem(cn)
     m = cols(mod.stSE)
     loop i = 1 .. n --quiet
-        name = cn[i]
+        depvar = cn[i]
         desc = cd[i]
-        comp += genseries(name, mod[name])
-        setinfo @name --description="@desc"
+        comp += genseries(depvar, mod[depvar])
+        setinfo @depvar --description="@desc"
         if stderrs && !mod.special_case &&(i<=m) # don't do irregular & exog
-            comp += genseries(name ~ "_se", mod.stSE[,i])
-            setinfo @name --description="@desc (s.e.)"
+            comp += genseries(depvar ~ "_se", mod.stSE[,i])
+            setinfo @depvar --description="@desc (s.e.)"
         endif
     endloop
 

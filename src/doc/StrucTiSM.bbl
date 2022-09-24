@@ -1,0 +1,56 @@
+\begin{thebibliography}{9}
+\expandafter\ifx\csname natexlab\endcsname\relax\def\natexlab#1{#1}\fi
+\expandafter\ifx\csname url\endcsname\relax
+  \def\url#1{\texttt{#1}}\fi
+\expandafter\ifx\csname urlprefix\endcsname\relax\def\urlprefix{URL }\fi
+
+\bibitem[{Commandeur and Koopman(2007)}]{CK2007}
+Commandeur JJ, Koopman SJ. 2007.
+\newblock \emph{An Introduction to State Space Time Series Analysis}.
+\newblock Oxford University Press.
+
+\bibitem[{Commandeur et~al.(2011)Commandeur, Koopman and Ooms}]{JSS2011}
+Commandeur JJ, Koopman SJ, Ooms M. 2011.
+\newblock {Statistical Software for State Space Methods}.
+\newblock \emph{Journal of Statistical Software} \textbf{41}.
+
+\bibitem[{Durbin and Koopman(2012)}]{DK2012}
+Durbin J, Koopman SJ. 2012.
+\newblock \emph{Time Series Analysis by State Space Methods}.
+\newblock Oxford University Press, 2 edition.
+
+\bibitem[{Hamilton(1994)}]{hamilton94}
+Hamilton JD. 1994.
+\newblock \emph{Time Series Analysis}.
+\newblock Princeton, NJ: Princeton University Press.
+
+\bibitem[{Harvey(1989)}]{Harvey1989}
+Harvey AC. 1989.
+\newblock \emph{Forecasting, Structural Time Series Models and the Kalman
+  Filter}.
+\newblock Cambridge University Press.
+
+\bibitem[{Harvey and Durbin(1986)}]{Harvey1986}
+Harvey AC, Durbin J. 1986.
+\newblock {The effects of seat belt legislation on British road casualties: A
+  case study in structural time series modelling}.
+\newblock \emph{Journal of the Royal Statistical Society. Series A (General)} :
+  187--227.
+
+\bibitem[{Lucchetti(2011)}]{Jack2011}
+Lucchetti R. 2011.
+\newblock {State Space Methods in gretl}.
+\newblock \emph{Journal of Statistical Software} \textbf{41}.
+
+\bibitem[{Pelagatti(2015)}]{Pelagatti2015}
+Pelagatti M. 2015.
+\newblock \emph{Time Series Modelling with Unobserved Components}.
+\newblock CRCpress.
+
+\bibitem[{Pollock(1999)}]{pollock99}
+Pollock DSG. 1999.
+\newblock \emph{A Handbook of Time-Series Analysis, Signal Processing and
+  Dynamics}.
+\newblock New York: Academic Press.
+
+\end{thebibliography}

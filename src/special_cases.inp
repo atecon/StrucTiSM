@@ -1,26 +1,34 @@
-function scalar check_for_special_cases(int trend, int slope, int seas)
-    ret = 0
-    # check for a few special cases that need no
-    # numerical optimisation
+function scalar get_special_case_id (const bundle self)
+    /* Check for a few special cases that need no numerical optimisation */
 
-    st_trend = (trend == 1)
-    st_slope = (slope == 1)
-    st_seas = (seas == 1) || (seas == 2)
+    scalar ret = 0
+    stochastic_trend = (self.type_trend == "stochastic")
+    stochastic_slope = (self.type_slope == "stochastic")
+    stochastic_season = stochastic_season_exists(self)
 
-    if !(st_trend || st_slope || st_trend) 
-	if trend==2 && slope==0 && seas == 0
-	    # case 1: just a constant + irregular
-	    ret = 1
-	elif trend==2 && slope==2 && seas == 0
-	    # case 2: constant + trend + irregular
-	    ret = 2
-	elif trend==2 && slope==0 && seas == 3
-	    # case 3: constant + seasonal dummies + irregular
-	    ret = 3
-	elif trend==2 && slope==2 && seas == 3
-	    # case 4: constant + trend + seasonal dummies + irregular
-	    ret = 4
-	endif
+    if !(stochastic_trend || stochastic_slope || stochastic_trend)
+    	if self.type_trend == "deterministic" && \
+            self.type_slope == "none" && \
+            self.n_seasonal_components == 0
+    	    # case 1: just a constant + irregular
+    	    ret = 1
+
+    	elif self.type_trend == "deterministic" && \
+            self.type_slope == "deterministic" && \
+            self.n_seasonal_components == 0
+    	    # case 2: constant + trend + irregular
+    	    ret = 2
+
+        elif self.type_trend == "deterministic" && \
+            self.type_slope == "none" && stochastic_season == FALSE
+    	    # case 3: constant + seasonal dummies + irregular
+    	    ret = 3
+
+        elif self.type_trend == "deterministic" && \
+            self.type_slope == "deterministic" && stochastic_season == FALSE
+    	    # case 4: constant + trend + seasonal dummies + irregular
+    	    ret = 4
+    	endif
     endif
     
     return ret
