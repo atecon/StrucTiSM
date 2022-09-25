@@ -20,8 +20,6 @@ function matrix Qseasonals (const bundle self)
     loop foreach i components
         scalar k = self.seasonal["$i"].frequency - 1
 
-        print self.seasonal["$i"]
-
         if self.seasonal["$i"].type == "trigonometric" && \
             self.seasonal["$i"].stochastic == TRUE
             matrix seas = diagcat(ret, mshape({1,0}, k, 1))

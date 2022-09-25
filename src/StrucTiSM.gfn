@@ -197,46 +197,34 @@ return self
 </code>
 </gretl-function>
 <gretl-function name="STSM_estimate" type="scalar">
- <params count="4">
-  <param name="mod" type="bundleref"/>
-  <param name="verbose" type="int" min="0" max="3" default="1"/>
+ <params count="3">
+  <param name="self" type="bundleref"/>
   <param name="mapping" type="int" min="0" max="2" default="1"/>
   <param name="vcvmethod" type="int" min="0" max="2" default="1"/>
  </params>
-<code># mapping: Reparametrisation (0 = Variances, 1 = Std. Dev (def), 2 = log)
+<code>/* Main function for estimation of the specified model. */
+# mapping: Reparametrisation (0 = Variances, 1 = Std. Dev (def), 2 = log)
 # vcvmethod: 0 = opg, 1 = Hessian (def), 2 = robust
-ini = mod.ini
-fin = mod.fin
-smpl ini fin
+smpl self.sample_start_index self.sample_end_index
 set warnings off
-nStates = mod.nStates
-nVar    = mod.nVar
-scale   = mod.scale
-has_eps = mod.epsilon
-nexog   = mod.nexog
-has_exog = (nexog &gt; 0)
-mod.mapping = mapping
-if mod.special_case
-  matrix self.special_case_id = handle_special_case(mod.special_case, mod.depvar, mod.pd)
-  St = self.special_case_id * scale
-  add_states_special(St, &amp;mod)
-  if verbose
-    STSM_printout(&amp;mod)
-  endif
-  return 0
+scalar has_exog = (self.nexog &gt; 0)
+self.mapping = mapping
+if self.special_case_id
+  estimate_special_case(&amp;self)
+  return FALSE
 endif
 # sanity check
-errorif( mod.nVar == 0 &amp;&amp; !(mod.epsilon), &quot;No variances to estimate!&quot;)
+errorif( self.nVar == 0 &amp;&amp; !(self.epsilon), &quot;No variances to estimate!&quot;)
 # return 2 # E_DATA
 # endif
-matrices SysMat = mod.SysMat
+matrices SysMat = self.SysMat
 # parameters to estimate
 if mapping == 2
-  matrix psi = zeros(nVar + has_eps, 1)
+  matrix psi = zeros(nVar + self.error_in_obseq, 1)
   stdveps = 0
 else
   a = 4
-  matrix psi = ones(nVar + has_eps, 1) .* a
+  matrix psi = ones(nVar + self.error_in_obseq, 1) .* a
   stdveps = a
 endif
 if verbose == 0 || verbose == 1
@@ -268,7 +256,7 @@ if has_exog &gt; 0
 endif
 # ML estimation ---------------------------------------------------------
 # test run
-ERR = inject(psi, &amp;SSmod, has_eps, nVar, R, mapping, nexog)
+ERR = inject(psi, &amp;SSmod, self.error_in_obseq, nVar, R, mapping, nexog)
 ERR = ERR || kfilter(&amp;SSmod)
 errorif( ERR, &quot;ML init failed!&quot;)
 # return 2 # E_DATA
@@ -280,7 +268,7 @@ series ll = SSmod.llt
 # endif
 set lbfgs on # seems to perform better than plain BFGS
 catch mle ll = ERR ? NA : misszero(ll)
-  ERR = inject(psi, &amp;SSmod, has_eps, nVar, R, mapping, nexog)
+  ERR = inject(psi, &amp;SSmod, self.error_in_obseq, nVar, R, mapping, nexog)
   ERR = ERR || kfilter(&amp;SSmod)
   series ll = SSmod.llt
   params psi
@@ -320,12 +308,12 @@ return 0
 string sample = model.sample_string
 scalar scale = model.scale
 scalar mapping = model.mapping
-has_eps = model.epsilon
+self.error_in_obseq = model.epsilon
 has_exog = model.nexog &gt; 0
 trend = model.trend
 slope = model.slope
 seasonal = model.seasonal
-strings plabs = parlabels(has_eps, trend, slope, seasonal, has_exog)
+strings plabs = parlabels(self.error_in_obseq, trend, slope, seasonal, has_exog)
 if model.nexog &gt; 0
   plabs += strsplit(strsub(model.xnames,&quot;,&quot;,&quot; &quot;))
 endif
@@ -340,7 +328,7 @@ else
   # printf &quot;mapping = %s, scale = %g\n&quot;, maps[mapping+1], scale
   printf &quot;Average log-likelihood = %g\n&quot;, meanc(model.llt)
 endif
-printf &quot;\n\nSpecification:\n\n%s\n\n&quot;, specification(has_eps, trend, slope, seasonal)
+printf &quot;\n\nSpecification:\n\n%s\n\n&quot;, specification(self.error_in_obseq, trend, slope, seasonal)
 </code>
 </gretl-function>
 <gretl-function name="STSM_components" type="list">
@@ -425,7 +413,7 @@ errorif( !inbundle(mod, &quot;compnames&quot;), sprintf( &quot;It seems that bun
 # matrices M     = mod.SysMat
 # scalar mapping = mod.mapping
 # scalar scale   = mod.scale
-# scalar has_eps = mod.epsilon
+# scalar self.error_in_obseq = mod.epsilon
 # scalar n       = mod.nVar
 # matrix depvar  = mod.depvar
 # set up the ssm from scratch (Sven: but why actually??)
@@ -537,7 +525,6 @@ matrix ret
 strings components = getkeys(self.seasonal)
 loop foreach i components
   scalar k = self.seasonal[&quot;$i&quot;].frequency - 1
-  print self.seasonal[&quot;$i&quot;]
   if self.seasonal[&quot;$i&quot;].type == &quot;trigonometric&quot; &amp;&amp; self.seasonal[&quot;$i&quot;].stochastic == TRUE
     matrix seas = diagcat(ret, mshape({1,0}, k, 1))
   elif self.seasonal[&quot;$i&quot;].type == &quot;trigonometric&quot; &amp;&amp; self.seasonal[&quot;$i&quot;].stochastic == FALSE
@@ -727,7 +714,7 @@ return Z
 <code>/* Compile the default bundle holding model parameters */
 bundle self = null
 scalar self.err = FALSE
-scalar self.verbose = FALSE
+scalar self.verbose = TRUE
 scalar self.error_in_obseq = TRUE          # formerly &quot;epsilon&quot;
 string self.type_trend = &quot;deterministic&quot;   # {&quot;stochastic&quot; &quot;deterministic&quot;}
 string self.type_slope = &quot;none&quot;  # {&quot;none&quot; &quot;stochastic&quot; &quot;deterministic&quot;}
@@ -1148,105 +1135,150 @@ endif
 return ret
 </code>
 </gretl-function>
-<gretl-function name="handle_special_case" type="matrix" private="1">
- <params count="3">
-  <param name="case" type="int"/>
-  <param name="y" type="matrix" const="true"/>
-  <param name="pd" type="scalar"/>
+<gretl-function name="special_case_seasonals" type="matrix" private="1">
+ <params count="2">
+  <param name="self" type="bundle" const="true"/>
+  <param name="trend" type="matrix" const="true"/>
  </params>
-<code>T = rows(y)
-X = ones(T, 1)
-Tr = seq(1,T)'
-matrix e = {}
-if (case == 2) || (case == 4)
-  X ~= Tr
+<code>/* Construct seasonals for estimating special cases.
+return: type, description */
+matrix X
+strings components = getkeys(self.seasonal)
+loop foreach i components
+  frq = self.seasonal[&quot;$i&quot;].frequency
+  matrix seas = (trend % frq) .= seq(1, (frq-1))
+  X ~= seas - (1 / frq)
+endloop
+return X
+</code>
+</gretl-function>
+<gretl-function name="special_case_state" type="matrix" private="1">
+ <params count="3">
+  <param name="self" type="bundle" const="true"/>
+  <param name="X" type="matrix" const="true"/>
+  <param name="coeff" type="matrix" const="true"/>
+ </params>
+<code>/* Compute state for special cases.
+return: matrix, Holds the estimated (un-scaled) components such as level etc.  */
+matrix state
+if self.special_case_id == 1
+  state = X * coeff
+elif self.special_case_id == 2
+  state = X[,1:2] * coeff[1:2]
+  state = state ~ mshape(coeff[2], self.T, 1)
+elif self.special_case_id == 3
+  state = mshape(coeff[1], self.T, 1) ~ X[,2:] * coeff[2:]
+elif self.special_case_id == 4
+  state = X[,1:2] * coeff[1:2]
+  state = state ~ mshape(coeff[2], self.T, 1)
+  state = state ~ X[,3:] * coeff[3:]
 endif
-if (case == 3) || (case == 4)
-  seas = (Tr % pd) .= seq(1,pd-1)
-  X ~= seas - (1/pd)
+return state
+</code>
+</gretl-function>
+<gretl-function name="special_case_seasonal_component" type="void" private="1">
+ <params count="2">
+  <param name="self" type="bundleref"/>
+  <param name="states" type="matrix" const="true"/>
+ </params>
+<code>/* Retrieve seasonal component as series, add variable names to bundle. */
+strings components = getkeys(self.seasonal)
+loop foreach i components
+  scalar frq = ceil(self.seasonal[&quot;$i&quot;].frequency)
+  string vname = sprintf(&quot;%s_seas_%d&quot;, self.depvarname, frq)
+  genseries(vname, states[,i])
+  self.component_names += vname
+  self.component_descriptions += sprintf(&quot;Seasonal Freq = %g (deterministic)&quot;, self.seasonal[&quot;$i&quot;].frequency)
+  self[vname] = @vname
+endloop
+</code>
+</gretl-function>
+<gretl-function name="handle_special_case" type="matrix" private="1">
+ <params count="1">
+  <param name="self" type="bundle" const="true"/>
+ </params>
+<code>/* */
+matrix X = ones(self.T, 1)
+matrix trend = seq(1, self.T)'
+matrix uhat = {}
+if (self.special_case_id == 2) || (self.special_case_id == 4)
+  X ~= trend
 endif
-Pi = mols(y, X, &amp;e)
-if case == 1
-  state = X*Pi
-elif case == 2
-  state = X[,1:2]*Pi[1:2]
-  state = state ~ mshape(Pi[2], T, 1)
-elif case == 3
-  state = mshape(Pi[1], T, 1) ~ X[,2:] * Pi[2:]
-elif case == 4
-  state = X[,1:2]*Pi[1:2]
-  state = state ~ mshape(Pi[2], T, 1)
-  state = state ~ X[,3:] * Pi[3:]
+if (self.special_case_id == 3) || (self.special_case_id == 4)
+  X ~= special_case_seasonals(self, trend)
 endif
-return e ~ state
+coeff = mols(self.depvar, X, &amp;uhat)
+matrix state = special_case_state(self, X, coeff)
+return uhat ~ state
 </code>
 </gretl-function>
 <gretl-function name="add_states_special" type="scalar" private="1">
  <params count="2">
-  <param name="St" type="matrix"/>
-  <param name="model" type="bundleref"/>
+  <param name="states" type="matrix"/>
+  <param name="self" type="bundleref"/>
  </params>
-<code>case = model.special_case
-strings compnames = null
-strings compdescs = null
-scalar ini = model.ini
-scalar fin = model.fin
-smpl ini fin
-# &quot;name&quot; holds the outer name of the dependent variable
-name = model.depvarname
-nStates = cols(St) - 1
-pd = model.pd
-# do the irregular component --------------------------
-sername = name ~ &quot;_irreg&quot;
-genseries(sername, St[,1])
-compnames += sername
-compdescs += &quot;Irregular&quot;
-model[sername] = @sername
-# do the level ---------------------------------------------
-string sername = name ~ &quot;_level&quot;
-genseries(sername, St[,2])
-compnames += sername
-compdescs += &quot;Trend level&quot;
-model[sername] = @sername
-scalar k = 2
-# do the slope, if present ---------------------------------
-if (case==2) || (case == 4)
-  k++
-  sername = name ~ &quot;_slope&quot;
-  genseries(sername, St[,k])
-  compnames += sername
-  compdescs += &quot;Slope&quot;
-  model[sername] = @sername
+<code>/* */
+strings self.component_names = null
+strings self.component_descriptions = null
+scalar counter = 2
+scalar self.nStates = cols(states) - 1
+# irregular component
+string vname = self.depvarname ~ &quot;_irreg&quot;
+genseries(vname, states[,1])
+self.component_names += vname
+self.component_descriptions += &quot;Irregular&quot;
+self[vname] = @vname  # store series
+# level component
+string vname = self.depvarname ~ &quot;_level&quot;
+genseries(vname, states[,2])
+self.component_names += vname
+self.component_descriptions += &quot;Trend level&quot;
+self[vname] = @vname
+# slope component if present
+if (self.special_case_id == 2) || (self.special_case_id  == 4)
+  counter++
+  vname = self.depvarname ~ &quot;_slope&quot;
+  genseries(vname, states[,counter])
+  self.component_names += vname
+  self.component_descriptions += &quot;Slope&quot;
+  self[vname] = @vname
 endif
-# do the seasonal, if present ------------------------------
-if (case==3) || (case == 4)
-  k++
-  # printf &quot;(seasonal) k = %d\n&quot;, k
-  sername = name ~ &quot;_seas&quot;
-  genseries(sername, St[,k])
-  compnames += sername
-  compdescs += &quot;Seasonal (deterministic)&quot;
-  model[sername] = @sername
+# seasonal component(s), if present
+if (self.special_case_id == 3) || (self.special_case_id  == 4)
+  counter += self.n_seasonal_components
+  scalar ini = counter
+  scalar ende = ini + self.n_seasonal_components - 1
+  special_case_seasonal_component(&amp;self, states[, ini:ende])
 endif
-# do the exogenous component, if present ---------------------
+# exogenous component, if present
 if 0 # not for now
-  k++
-  nVar = model.nVar
-  sername = name ~ &quot;_exo&quot;
-  beta = model.coeff[has_eps + model.nVar + 1:]
-  genseries(sername, model.mX * beta)
-  compnames += sername
-  compdescs += &quot;Exogenous&quot;
-  model[sername] = @sername
+  counter++
+  nVar = self.nVar
+  vname = name ~ &quot;_exo&quot;
+  beta = self.coeff[has_eps + self.nVar + 1:]
+  genseries(vname, self.mX * beta)
+  self.component_names += vname
+  self.component_descriptions += &quot;Exogenous&quot;
+  model[vname] = @vname
   if has_eps
-    series eps -= @sername
+    series eps -= @vname
   endif
 endif
-# Add the names of the newly created series to the bundle
-strings model.compnames = compnames
-strings model.compdescs = compdescs
-model.stSE = mshape(NA,fin-ini+1, k)
-return k
+self.stSE = mshape(NA, self.T, counter)
+return counter
+</code>
+</gretl-function>
+<gretl-function name="estimate_special_case" type="void" private="1">
+ <params count="1">
+  <param name="self" type="bundleref"/>
+ </params>
+<code>/* Call functions for estimating special case specifications which do not require numerical optimisation. */
+matrix components = handle_special_case(self) # unscaled components
+matrix components *= self.y_scaling_factor
+add_states_special(components, &amp;self)
+if self.verbose
+  STSM_printout(&amp;self)
+endif
 </code>
 </gretl-function>
 <gretl-function name="kfcast" type="scalar" private="1">
@@ -1445,10 +1477,11 @@ if example == k || example == -1
 
     epsilon = TRUE
     trend = 1
-    slope = 1
-    seasonal = 0
+    slope = 0
+    seasonal = 1
 
     model = STSM_setup(nile, epsilon, trend, slope, seasonal)
+
     scalar err = STSM_estimate(&amp;model)
     list comps = STSM_components(model)
     series level_se = model.stSE[,1]
@@ -1465,8 +1498,9 @@ k++
 if example == k || example == -1
     open bikesharing.gdt --quiet --preserve
 
-    bundle self = _(error_in_obseq = TRUE,\
-                    type_trend = &quot;stochastic&quot;)
+    bundle self = _(error_in_obseq = TRUE) #,\
+
+                    #type_trend = &quot;stochastic&quot;)
 
     model = STSM_setup(cnt, self)
     scalar err = STSM_estimate(&amp;model)

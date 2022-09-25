@@ -20,7 +20,7 @@ function bundle default_model_bundle (void)
     bundle self = null
 
     scalar self.err = FALSE
-    scalar self.verbose = FALSE
+    scalar self.verbose = TRUE
     scalar self.error_in_obseq = TRUE          # formerly "epsilon"
     string self.type_trend = "deterministic"   # {"stochastic" "deterministic"}
     string self.type_slope = "none"  # {"none" "stochastic" "deterministic"}

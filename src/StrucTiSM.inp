@@ -51,55 +51,41 @@ function bundle STSM_setup (const series y "Dependent variable",
     return self
 end function
 
-###############################
 
-
-function scalar STSM_estimate (bundle *mod, int verbose[0:3:1],
-                               int mapping[0:2:1], int vcvmethod[0:2:1])
-
+# TODO: adapt signature
+function scalar STSM_estimate (bundle *self,
+                               int mapping[0:2:1],
+                               int vcvmethod[0:2:1])
+    /* Main function for estimation of the specified model. */
     # mapping: Reparametrisation (0 = Variances, 1 = Std. Dev (def), 2 = log)
     # vcvmethod: 0 = opg, 1 = Hessian (def), 2 = robust
 
-    ini = mod.ini
-    fin = mod.fin
-    smpl ini fin
+    smpl self.sample_start_index self.sample_end_index
     set warnings off
 
-    nStates = mod.nStates
-    nVar    = mod.nVar
-    scale   = mod.scale
-    has_eps = mod.epsilon
-    nexog   = mod.nexog
-    has_exog = (nexog > 0)
+    scalar has_exog = (self.nexog > 0)
+    self.mapping = mapping
 
-    mod.mapping = mapping
-
-    if mod.special_case
-        matrix self.special_case_id = handle_special_case(mod.special_case,
-          mod.depvar, mod.pd)
-        St = self.special_case_id * scale
-        add_states_special(St, &mod)
-        if verbose
-            STSM_printout(&mod)
-        endif
-        return 0
+    if self.special_case_id
+        estimate_special_case(&self)
+        return FALSE
     endif
 
     # sanity check
-    errorif( mod.nVar == 0 && !(mod.epsilon), "No variances to estimate!")
+    errorif( self.nVar == 0 && !(self.error_in_obseq), "No variances to estimate!")
         # return 2 # E_DATA
     # endif
 
-    matrices SysMat = mod.SysMat
+    matrices SysMat = self.SysMat
 
     # parameters to estimate
 
     if mapping == 2
-        matrix psi = zeros(nVar + has_eps, 1)
+        matrix psi = zeros(nVar + self.error_in_obseq, 1)
         stdveps = 0
     else
         a = 4
-        matrix psi = ones(nVar + has_eps, 1) .* a
+        matrix psi = ones(nVar + self.error_in_obseq, 1) .* a
         stdveps = a
     endif
 
@@ -137,7 +123,7 @@ function scalar STSM_estimate (bundle *mod, int verbose[0:3:1],
 
     # ML estimation ---------------------------------------------------------
     # test run
-    ERR = inject(psi, &SSmod, has_eps, nVar, R, mapping, nexog)
+    ERR = inject(psi, &SSmod, self.error_in_obseq, nVar, R, mapping, nexog)
     ERR = ERR || kfilter(&SSmod)
 
     errorif( ERR, "ML init failed!")
@@ -152,7 +138,7 @@ function scalar STSM_estimate (bundle *mod, int verbose[0:3:1],
     set lbfgs on # seems to perform better than plain BFGS
 
     catch mle ll = ERR ? NA : misszero(ll)
-        ERR = inject(psi, &SSmod, has_eps, nVar, R, mapping, nexog)
+        ERR = inject(psi, &SSmod, self.error_in_obseq, nVar, R, mapping, nexog)
         ERR = ERR || kfilter(&SSmod)
         series ll = SSmod.llt
         params psi
@@ -261,7 +247,7 @@ function scalar STSM_fcast(bundle *mod, int horizon[0], bool verbose[1],
     # matrices M     = mod.SysMat
     # scalar mapping = mod.mapping
     # scalar scale   = mod.scale
-    # scalar has_eps = mod.epsilon
+    # scalar self.error_in_obseq = mod.error_in_obseq
     # scalar n       = mod.nVar
     # matrix depvar  = mod.depvar
 
@@ -279,7 +265,7 @@ function scalar STSM_fcast(bundle *mod, int horizon[0], bool verbose[1],
     
     if ok(mod.nVar) && mod.nVar > 0 # ok(n) && n > 0
         # matrix coeff = mod.coeff
-        err = inject(mod.coeff, &kmod, mod.epsilon, mod.nVar, R, mod.mapping, mod.nexog)
+        err = inject(mod.coeff, &kmod, mod.error_in_obseq, mod.nVar, R, mod.mapping, mod.nexog)
         # (also defines kmod.obsxmat if applicable)
         
         if mod.nexog
@@ -319,40 +305,40 @@ end function
 
 ##########################################
 
-function void STSM_printout(bundle *model)
+*** HIER WEITERMACHEN ***
+function void STSM_printout (bundle *self)
+    /* */
 
-    string depvar = model.depvarname
-    string sample = model.sample_string
-    scalar scale = model.scale
-    scalar mapping = model.mapping
-    has_eps = model.epsilon
-    has_exog = model.nexog > 0
-    trend = model.trend
-    slope = model.slope
-    seasonal = model.seasonal
+    scalar mapping = self.mapping
+    scalar has_exog = self.nexog > 0
+    #trend = self.trend
+    #slope = self.slope
+    #seasonal = self.seasonal
 
-    strings plabs = parlabels(has_eps, trend, slope, seasonal, has_exog)
-    if model.nexog > 0
-        plabs += strsplit(strsub(model.xnames,","," "))
+    strings plabs = parlabels(self.error_in_obseq, trend, slope,\
+                              seasonal, has_exog)
+    if self.nexog > 0
+        plabs += strsplit(strsub(self.xnames,","," "))
     endif
 
-    printf "\nStructural model for %s, %s (T = %d)\n", depvar, sample,
-      sum(ok(model.depvar))
+    printf "\nStructural model for %s, %s (T = %d)\n",\
+        self.depvarname, self.sample_string, self.T)
 
-    if model.special_case
+    if self..special_case_id
         printf "Estimation carried out via OLS."
     else
-        cf = model.coeff ~ sqrt(diag(model.vcv))
+        cf = self.coeff ~ sqrt(diag(self.vcv))
         # k = rows(cf)
         modprint cf plabs
         # maps = defarray("Variances", "Std. Dev", "log")
-        # printf "mapping = %s, scale = %g\n", maps[mapping+1], scale
+        # printf "mapping = %s, scale = %g\n", maps[mapping+1],\
+        #   self.y_scaling_factor
 
-        printf "Average log-likelihood = %g\n", meanc(model.llt)
+        printf "Average log-likelihood = %g\n", meanc(self.llt)
     endif
 
     printf "\n\nSpecification:\n\n%s\n\n", \
-      specification(has_eps, trend, slope, seasonal)
+      specification(self.error_in_obseq, trend, slope, seasonal)
 
 end function
 
