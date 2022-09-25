@@ -79,7 +79,7 @@ function scalar stochastic_season_exists (const bundle self)
     strings components = getkeys(self.seasonal)
 
     loop foreach i components
-        if self.seasonal["$i"].type == "stochastic"
+        if self.seasonal["$i"].stochastic == TRUE
             ret++
         endif
     endloop

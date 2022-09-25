@@ -178,7 +178,7 @@ endif
 set skip_missing off
 bundle self = default_model_bundle()
 if exists(model)
-  self = self + model
+  self = model + self
 endif
 check_seasonality(&amp;self)
 scalar self.n_seasonal_components = nelem(getkeys(self.seasonal))
@@ -191,15 +191,8 @@ self.T = self.sample_end_index - self.sample_start_index + 1
 self.sample_string = get_sample_string(self.sample_start_index, self.sample_end_index)
 matrix self.depvar = {scale_series(y, &amp;self)}
 get_xlist_details(xlist, &amp;self)
-print self
-stop
 self.special_case_id = get_special_case_id(self)
-if self.special_case_id
-  matrices self.SysMat = array(0)
-else
-  matrices self.SysMat = InitSystemMats(&amp;self)
-  # trend, slope, seasonal, &amp;nStates, &amp;nVar)
-endif
+prepare_system_matrices(&amp;self)
 return self
 </code>
 </gretl-function>
@@ -523,125 +516,211 @@ endif
 return ret
 </code>
 </gretl-function>
-<gretl-function name="Qmat" type="matrix" private="1">
- <params count="4">
-  <param name="trend" type="int"/>
-  <param name="slope" type="int"/>
-  <param name="seas" type="int"/>
-  <param name="pd" type="int"/>
+<gretl-function name="prepare_system_matrices" type="void" private="1">
+ <params count="1">
+  <param name="self" type="bundleref"/>
  </params>
-<code># this function returns a matrix mapping the stochastic shocks into the
-# state transition variance matrix: it has as many rows as the dimension
-# of the state vector and as many columns as the number of variances
-# to estimate
-ret = {}
-if trend == 1
+<code>/* Call functions preparing various system matrices. */
+if self.special_case_id
+  matrices self.SysMat = array(0)
+else
+  initialize_system_matrices(&amp;self)
+endif
+</code>
+</gretl-function>
+<gretl-function name="Qseasonals" type="matrix" private="1">
+ <params count="1">
+  <param name="self" type="bundle" const="true"/>
+ </params>
+<code>/* Call actual function. */
+matrix ret
+strings components = getkeys(self.seasonal)
+loop foreach i components
+  scalar k = self.seasonal[&quot;$i&quot;].frequency - 1
+  print self.seasonal[&quot;$i&quot;]
+  if self.seasonal[&quot;$i&quot;].type == &quot;trigonometric&quot; &amp;&amp; self.seasonal[&quot;$i&quot;].stochastic == TRUE
+    matrix seas = diagcat(ret, mshape({1,0}, k, 1))
+  elif self.seasonal[&quot;$i&quot;].type == &quot;trigonometric&quot; &amp;&amp; self.seasonal[&quot;$i&quot;].stochastic == FALSE
+    # TODO: Can we implement this?
+    errorif(TRUE, &quot;Non-stochastic trigonometric seasonality not supported.&quot;)
+  elif self.seasonal[&quot;$i&quot;].type == &quot;dummy&quot; &amp;&amp; self.seasonal[&quot;$i&quot;].stochastic == TRUE
+    matrix seas = diagcat(ret, 1 | zeros(k-1, 1))
+  elif self.seasonal[&quot;$i&quot;].type == &quot;dummy&quot; &amp;&amp; self.seasonal[&quot;$i&quot;].stochastic == FALSE
+    matrix seas = diagcat(ret, zeros(k, 1))
+  endif
+  if nelem(components) == 1
+    ret = seas
+    break
+  endif
+  ret = (i &gt; 1) ? diagcat(ret, seas) : seas
+endloop
+return ret
+</code>
+</gretl-function>
+<gretl-function name="Qmat" type="matrix" private="1">
+ <params count="1">
+  <param name="self" type="bundle" const="true"/>
+ </params>
+<code>/* This function returns a matrix mapping the stochastic shocks into the
+state transition variance matrix: it has as many rows as the dimension
+of the state vector and as many columns as the number of variances
+to estimate. */
+matrix ret
+if self.type_trend == &quot;stochastic&quot;
   ret = diagcat(ret, 1)
-elif trend == 2
+elif self.type_trend == &quot;deterministic&quot;
   ret = diagcat(ret, 0)
 endif
-if slope == 1
+if self.type_slope == &quot;stochastic&quot;
   ret = diagcat(ret, 1)
-elif slope == 2
+elif self.type_slope == &quot;deterministic&quot;
   ret = diagcat(ret, 0)
+else
+  # nothing to do if no slope is requested
 endif
-k = pd - 1
-if seas == 1
-  ret = diagcat(ret, mshape({1,0}, k, 1))
-elif seas == 2
-  ret = diagcat(ret, 1 | zeros(k-1, 1))
-elif seas == 3
-  ret = diagcat(ret, zeros(k, 1))
-endif
+ret = diagcat(ret, Qseasonals(self))
 return selifc(ret, maxc(ret) .&gt; 0)
 </code>
 </gretl-function>
-<gretl-function name="Fseas" type="matrix" private="1">
- <params count="2">
-  <param name="trig" type="bool"/>
-  <param name="pd" type="scalar"/>
+<gretl-function name="trigonometric_seasonality" type="matrix" private="1">
+ <params count="1">
+  <param name="pd" type="scalar" const="true"/>
  </params>
-<code>if trig
-  odd = pd % 2
-  dim = pd - 1
-  H = floor(pd/2) - 1 + odd
-  ret = zeros(dim, dim)
-  fin = 0
-  loop i = 1..H
-    ini = fin+1
-    fin = ini+1
-    scalar c = cos(2*$pi * i/pd)
-    scalar s = sin(2*$pi * i/pd)
-    ret[ini:fin, ini:fin] = {c, s; -s, c}
-  endloop
-  if !odd
-    ret[H*2 + 1, H*2 + 1] = -1
-  endif
-else
-  # BSM transition matrix with dummy seasonals:
-  ret = -ones(1, pd-1) | (I(pd-2) ~ 0)
+<code>/* Compute BSM transition matrix for trigonometric seasonality.
+return: type, description */
+odd = pd % 2
+dim = pd - 1
+H = floor(pd/2) - 1 + odd
+ret = zeros(dim, dim)
+fin = 0
+loop i = 1..H
+  ini = fin+1
+  fin = ini+1
+  scalar c = cos(2*$pi * i/pd)
+  scalar s = sin(2*$pi * i/pd)
+  ret[ini:fin, ini:fin] = {c, s; -s, c}
+endloop
+if !odd
+  ret[H*2 + 1, H*2 + 1] = -1
 endif
+return variable
+</code>
+</gretl-function>
+<gretl-function name="dummy_seasonality" type="matrix" private="1">
+ <params count="1">
+  <param name="pd" type="scalar" const="true"/>
+ </params>
+<code>/* Compute BSM transition matrix for seasonal dummies.
+return: type, description */
+return -ones(1, pd-1) | (I(pd-2) ~ 0)
+</code>
+</gretl-function>
+<gretl-function name="Tseasonals" type="matrix" private="1">
+ <params count="1">
+  <param name="self" type="bundle" const="true"/>
+ </params>
+<code>/* Call actual function. */
+matrix ret
+strings components = getkeys(self.seasonal)
+loop foreach i components
+  if self.seasonal[&quot;$i&quot;].type == &quot;dummy&quot;
+    matrix seas = dummy_seasonality(self.seasonal[&quot;$i&quot;].frequency)
+  elif
+    self.seasonal[&quot;$i&quot;].type == &quot;trigonometric&quot;
+    matrix seas = trigonometric_seasonality(self.seasonal[&quot;$i&quot;].frequency)
+  endif
+  if nelem(components) == 1
+    ret = seas
+    break
+  endif
+  ret = (i &gt; 1) ? diagcat(ret, seas) : seas
+endloop
 return ret
 </code>
 </gretl-function>
 <gretl-function name="Tmat" type="matrix" private="1">
- <params count="3">
-  <param name="slope" type="int"/>
-  <param name="seasonal" type="int"/>
-  <param name="pd" type="scalar"/>
+ <params count="1">
+  <param name="self" type="bundle" const="true"/>
  </params>
 <code>/* Compile the transition matrix T. */
-if slope
+if self.type_slope != &quot;none&quot;
   ret = {1, 1; 0, 1}  # random-walk in beta
 else
   ret = {1}
-  #ret = {1, 0; 0, 0}  # only random-walk in mu
 endif
-ret
-if seasonal
-  # seasonal component: 1 = trigonometric 2,3 = dummy
-  seas1 = Fseas(seasonal == 1, pd)
-  ret = diagcat(ret, seas1)
-  # FIXME: remove seas2
-  #seas2 = Fseas(seasonal == 1, 365)
-  #ret = diagcat(ret, seas2)
+if self.n_seasonal_components
+  matrix seas = Tseasonals(self)
+  ret = diagcat(ret, seas)
 endif
 return ret
 </code>
 </gretl-function>
-<gretl-function name="InitSystemMats" type="matrices" private="1">
- <params count="5">
-  <param name="trend" type="int"/>
-  <param name="slope" type="int"/>
-  <param name="seasonal" type="int"/>
-  <param name="nStates" type="scalarref"/>
-  <param name="nVar" type="scalarref"/>
+<gretl-function name="initialize_system_matrices" type="void" private="1">
+ <params count="1">
+  <param name="self" type="bundleref"/>
  </params>
-<code>matrices ret = array(3)
+<code>/* Construct all necessary system matrices and add to self. */
+# int trend, int slope, int seasonal, scalar *nStates, scalar *nVar)
+#matrices ret = array(3)
 # in this order: T (statemat), Q (used for statevar)
 # Z (obsmat)
 # Transition equation
-matrix ret[1] = Tmat(slope, seasonal, $pd)
-nStates = rows(ret[1]) # size of state vector
+matrix self.Tmat = Tmat(self)
+scalar self.nStates = rows(self.Tmat)   # size of state vector
 # Square matrix of variance
-matrix ret[2] = Qmat(trend, slope, seasonal, $pd)
-nVar = cols(ret[2])
+matrix self.Qmat = Qmat(self)
+self.nVar = cols(self.Qmat)
 # measurement equation: matrix of the state vector
-matrix Z = (slope) ? { 1; 0 } : {1}     # trend component
-if seasonal == 1  # stochastic trigonometric terms
-  Z |= mshape({1,0}, $pd - 1, 1)
-elif seasonal &gt; 1 # dummy variables (stochastic and deterministic)
-  Z |= 1 | zeros($pd-2, 1)
-endif
-ret[3] = Z
-if rows(ret[2]) != nStates
+matrix self.Zmat = Zmat(self)
+if rows(self.Qmat) != self.nStates
+  print self
   # sanity check
-  printf &quot;Mismatch! (nStates = %d)\n&quot;, nStates
-  printf &quot;statemat:\n%5.1f\n&quot;, ret[1]
-  printf &quot;R:\n%5.1f\n&quot;, ret[2]
-  printf &quot;obsmat:\n%5.1f\n&quot;, Z
+  printf &quot;Mismatch! (nStates = %d)\n&quot;, self.nStates
+  printf &quot;statemat (T):\n%5.1f\n&quot;, self.Tmat
+  printf &quot;Q:\n%5.1f\n&quot;, self.Qmat
+  printf &quot;obsmat (Z):\n%5.1f\n&quot;, self.Zmat
 endif
+</code>
+</gretl-function>
+<gretl-function name="Zseasonals" type="matrix" private="1">
+ <params count="1">
+  <param name="self" type="bundle" const="true"/>
+ </params>
+<code>/* Call actual function. */
+matrix ret
+strings components = getkeys(self.seasonal)
+loop foreach i components
+  scalar pd = self.seasonal[&quot;$i&quot;].frequency
+  if self.seasonal[&quot;$i&quot;].type == &quot;dummy&quot;
+    k = pd - 2
+    matrix seas = 1 | zeros(k, 1)
+  else
+    k = pd - 1
+    matrix seas = mshape({1,0}, $pd - 1, 1)
+  endif
+  if nelem(components) == 1
+    ret = seas
+    break
+  endif
+  ret = (i &gt; 1) ? diagcat(ret, seas) : seas
+endloop
 return ret
+</code>
+</gretl-function>
+<gretl-function name="Zmat" type="matrix" private="1">
+ <params count="1">
+  <param name="self" type="bundle" const="true"/>
+ </params>
+<code>/* Construct measurement equation matrix. */
+matrix Z
+# trend component
+if self.type_slope == &quot;none&quot;
+  Z = {1}
+else
+  Z = { 1; 0 }
+endif
+Z |= Zseasonals(self)
+return Z
 </code>
 </gretl-function>
 <gretl-function name="default_model_bundle" type="bundle" private="1">
@@ -707,7 +786,7 @@ return: type, description */
 scalar ret = 0
 strings components = getkeys(self.seasonal)
 loop foreach i components
-  if self.seasonal[&quot;$i&quot;].type == &quot;stochastic&quot;
+  if self.seasonal[&quot;$i&quot;].stochastic == TRUE
     ret++
   endif
 endloop
@@ -1050,17 +1129,18 @@ scalar ret = 0
 stochastic_trend = (self.type_trend == &quot;stochastic&quot;)
 stochastic_slope = (self.type_slope == &quot;stochastic&quot;)
 stochastic_season = stochastic_season_exists(self)
+# TODO: I think the if-conditions may be simplified
 if !(stochastic_trend || stochastic_slope || stochastic_trend)
-  if self.type_trend == &quot;deterministic&quot; &amp;&amp; self.type_slope == &quot;none&quot; &amp;&amp; self.n_seasonal_components == 0
+  if stochastic_trend == FALSE &amp;&amp; self.type_slope == &quot;none&quot; &amp;&amp; self.n_seasonal_components == 0
     # case 1: just a constant + irregular
     ret = 1
-  elif self.type_trend == &quot;deterministic&quot; &amp;&amp; self.type_slope == &quot;deterministic&quot; &amp;&amp; self.n_seasonal_components == 0
+  elif stochastic_trend == FALSE &amp;&amp; self.type_slope == &quot;deterministic&quot; &amp;&amp; self.n_seasonal_components == 0
     # case 2: constant + trend + irregular
     ret = 2
-  elif self.type_trend == &quot;deterministic&quot; &amp;&amp; self.type_slope == &quot;none&quot; &amp;&amp; stochastic_season == FALSE
+  elif stochastic_trend == FALSE &amp;&amp; self.type_slope == &quot;none&quot; &amp;&amp; stochastic_season == FALSE
     # case 3: constant + seasonal dummies + irregular
     ret = 3
-  elif self.type_trend == &quot;deterministic&quot; &amp;&amp; self.type_slope == &quot;deterministic&quot; &amp;&amp; stochastic_season == FALSE
+  elif stochastic_trend == FALSE &amp;&amp; self.type_slope == &quot;deterministic&quot; &amp;&amp; stochastic_season == FALSE
     # case 4: constant + trend + seasonal dummies + irregular
     ret = 4
   endif
@@ -1365,7 +1445,7 @@ if example == k || example == -1
 
     epsilon = TRUE
     trend = 1
-    slope = 0
+    slope = 1
     seasonal = 0
 
     model = STSM_setup(nile, epsilon, trend, slope, seasonal)

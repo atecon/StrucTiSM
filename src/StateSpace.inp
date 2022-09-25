@@ -4,39 +4,77 @@ function void prepare_system_matrices (bundle *self)
     if self.special_case_id
         matrices self.SysMat = array(0)
     else
-        matrices self.SysMat = InitSystemMats(&self)
+        initialize_system_matrices(&self)
     endif
 end function
 
 
-function matrix Qmat(int trend, int slope, int seas, int pd)
-    # this function returns a matrix mapping the stochastic shocks into the
-    # state transition variance matrix: it has as many rows as the dimension
-    # of the state vector and as many columns as the number of variances
-    # to estimate
+# TODO: needs testing with different components + frequencies. E.g.
+# C1: freq=7, dummy, C2: freq=365, trigonometric
+function matrix Qseasonals (const bundle self)
+    /* Call actual function. */
 
-    ret = {}
+    matrix ret
+    strings components = getkeys(self.seasonal)
 
-    if trend == 1
+    loop foreach i components
+        scalar k = self.seasonal["$i"].frequency - 1
+
+        print self.seasonal["$i"]
+
+        if self.seasonal["$i"].type == "trigonometric" && \
+            self.seasonal["$i"].stochastic == TRUE
+            matrix seas = diagcat(ret, mshape({1,0}, k, 1))
+
+        elif self.seasonal["$i"].type == "trigonometric" && \
+            self.seasonal["$i"].stochastic == FALSE
+            # TODO: Can we implement this?
+            errorif(TRUE, "Non-stochastic trigonometric seasonality not supported.")
+
+        elif self.seasonal["$i"].type == "dummy" && \
+            self.seasonal["$i"].stochastic == TRUE
+            matrix seas = diagcat(ret, 1 | zeros(k-1, 1))
+
+        elif self.seasonal["$i"].type == "dummy" && \
+            self.seasonal["$i"].stochastic == FALSE
+            matrix seas = diagcat(ret, zeros(k, 1))
+        endif
+
+        if nelem(components) == 1
+            ret = seas
+            break
+        endif
+        ret = (i > 1) ? diagcat(ret, seas) : seas
+    endloop
+
+    return ret
+end function
+
+
+
+function matrix Qmat (const bundle self)
+    /* This function returns a matrix mapping the stochastic shocks into the
+     state transition variance matrix: it has as many rows as the dimension
+     of the state vector and as many columns as the number of variances
+     to estimate. */
+
+    matrix ret
+
+    if self.type_trend == "stochastic"
         ret = diagcat(ret, 1)
-    elif trend == 2
+    elif self.type_trend == "deterministic"
         ret = diagcat(ret, 0)
     endif
 
-    if slope == 1
+    if self.type_slope == "stochastic"
         ret = diagcat(ret, 1)
-    elif slope == 2
+    elif self.type_slope == "deterministic"
         ret = diagcat(ret, 0)
+    else
+        # nothing to do if no slope is requested
     endif
 
-    k = pd - 1
-    if seas == 1
-        ret = diagcat(ret, mshape({1,0}, k, 1))
-    elif seas == 2
-        ret = diagcat(ret, 1 | zeros(k-1, 1))
-    elif seas == 3
-        ret = diagcat(ret, zeros(k, 1))
-    endif
+    ret = diagcat(ret, Qseasonals(self))
 
     return selifc(ret, maxc(ret) .> 0)
 end function
@@ -45,87 +83,156 @@ end function
 # 1.1 BSM transition matrix with particular cases:
 # no slope/slope, no seasonal/seasonal trigon./seasonal dummies
 
-function matrix Fseas(bool trig, scalar pd)
-    if trig
-        odd = pd % 2
-        dim = pd - 1
-        H = floor(pd/2) - 1 + odd
-        ret = zeros(dim, dim)
-        fin = 0
-        loop i = 1..H
-            ini = fin+1
-            fin = ini+1
-            scalar c = cos(2*$pi * i/pd)
-            scalar s = sin(2*$pi * i/pd)
-            ret[ini:fin, ini:fin] = {c, s; -s, c}
-        endloop
-        if !odd
-            ret[H*2 + 1, H*2 + 1] = -1
-        endif
-    else
-        # BSM transition matrix with dummy seasonals:
-        ret = -ones(1, pd-1) | (I(pd-2) ~ 0)
+function matrix trigonometric_seasonality (const scalar pd)
+    /* Compute BSM transition matrix for trigonometric seasonality.
+    return: type, description */
+
+    odd = pd % 2
+    dim = pd - 1
+    H = floor(pd/2) - 1 + odd
+    ret = zeros(dim, dim)
+    fin = 0
+
+    loop i = 1..H
+        ini = fin+1
+        fin = ini+1
+        scalar c = cos(2*$pi * i/pd)
+        scalar s = sin(2*$pi * i/pd)
+        ret[ini:fin, ini:fin] = {c, s; -s, c}
+    endloop
+    if !odd
+        ret[H*2 + 1, H*2 + 1] = -1
     endif
+
+    return variable
+end function
+
+function matrix dummy_seasonality (const scalar pd)
+    /* Compute BSM transition matrix for seasonal dummies.
+    return: type, description */
+
+    return -ones(1, pd-1) | (I(pd-2) ~ 0)
+end function
+
+
+# TODO: needs testing with different components + frequencies. E.g.
+# C1: freq=7, dummy, C2: freq=365, trigonometric
+function matrix Tseasonals (const bundle self)
+    /* Call actual function. */
+
+    matrix ret
+    strings components = getkeys(self.seasonal)
+
+    loop foreach i components
+        if self.seasonal["$i"].type == "dummy"
+            matrix seas = dummy_seasonality(self.seasonal["$i"].frequency)
+        elif
+            self.seasonal["$i"].type == "trigonometric"
+            matrix seas =  \
+                trigonometric_seasonality(self.seasonal["$i"].frequency)
+        endif
+
+        if nelem(components) == 1
+            ret = seas
+            break
+        endif
+        ret = (i > 1) ? diagcat(ret, seas) : seas
+    endloop
 
     return ret
 end function
 
-function matrix Tmat(int slope, int seasonal, scalar pd)
+
+function matrix Tmat (const bundle self)
     /* Compile the transition matrix T. */
 
-    if slope
+    if self.type_slope != "none"
         ret = {1, 1; 0, 1}  # random-walk in beta
     else
         ret = {1}
-        #ret = {1, 0; 0, 0}  # only random-walk in mu
     endif
-    ret
-    if seasonal
-        # seasonal component: 1 = trigonometric 2,3 = dummy
-        seas1 = Fseas(seasonal == 1, pd)
-        ret = diagcat(ret, seas1)
-        # FIXME: remove seas2
-        #seas2 = Fseas(seasonal == 1, 365)
-        #ret = diagcat(ret, seas2)
+
+    if self.n_seasonal_components
+        matrix seas = Tseasonals(self)
+        ret = diagcat(ret, seas)
     endif
 
     return ret
 end function
 
 
-function matrices InitSystemMats(int trend, int slope, int seasonal,
-                                 scalar *nStates, scalar *nVar)
+function void initialize_system_matrices (bundle *self)
+    /* Construct all necessary system matrices and add to self. */
+    # int trend, int slope, int seasonal, scalar *nStates, scalar *nVar)
 
-    matrices ret = array(3)
+    #matrices ret = array(3)
     # in this order: T (statemat), Q (used for statevar)
     # Z (obsmat)
 
     # Transition equation
-    matrix ret[1] = Tmat(slope, seasonal, $pd)
-    nStates = rows(ret[1]) # size of state vector
+    matrix self.Tmat = Tmat(self)
+    scalar self.nStates = rows(self.Tmat)   # size of state vector
     
     # Square matrix of variance
-    matrix ret[2] = Qmat(trend, slope, seasonal, $pd)
-    nVar = cols(ret[2])
+    matrix self.Qmat = Qmat(self)
+    self.nVar = cols(self.Qmat)
 
     # measurement equation: matrix of the state vector
-    matrix Z = (slope) ? { 1; 0 } : {1}     # trend component
+    matrix self.Zmat = Zmat(self)
 
-    if seasonal == 1  # stochastic trigonometric terms
-        Z |= mshape({1,0}, $pd - 1, 1)
-    elif seasonal > 1 # dummy variables (stochastic and deterministic)
-        Z |= 1 | zeros($pd-2, 1)
-    endif
-    ret[3] = Z
-
-    if rows(ret[2]) != nStates
+    if rows(self.Qmat) != self.nStates
+        print self
         # sanity check
-        printf "Mismatch! (nStates = %d)\n", nStates
-        printf "statemat:\n%5.1f\n", ret[1]
-        printf "R:\n%5.1f\n", ret[2]
-        printf "obsmat:\n%5.1f\n", Z
+        printf "Mismatch! (nStates = %d)\n", self.nStates
+        printf "statemat (T):\n%5.1f\n", self.Tmat
+        printf "Q:\n%5.1f\n", self.Qmat
+        printf "obsmat (Z):\n%5.1f\n", self.Zmat
     endif
+end function
+
+
+# TODO: needs testing with different components + frequencies. E.g.
+# C1: freq=7, dummy, C2: freq=365, trigonometric
+function matrix Zseasonals (const bundle self)
+    /* Call actual function. */
+
+    matrix ret
+    strings components = getkeys(self.seasonal)
+
+    loop foreach i components
+        scalar pd = self.seasonal["$i"].frequency
+
+        if self.seasonal["$i"].type == "dummy"
+            k = pd - 2
+            matrix seas = 1 | zeros(k, 1)
+        else
+            k = pd - 1
+            matrix seas = mshape({1,0}, $pd - 1, 1)
+        endif
+
+        if nelem(components) == 1
+            ret = seas
+            break
+        endif
+        ret = (i > 1) ? diagcat(ret, seas) : seas
+    endloop
 
     return ret
 end function
 
+function matrix Zmat (const bundle self)
+    /* Construct measurement equation matrix. */
+
+    matrix Z
+
+    # trend component
+    if self.type_slope == "none"
+        Z = {1}
+    else
+        Z = { 1; 0 }
+    endif
+
+    Z |= Zseasonals(self)
+
+   return Z
+end function

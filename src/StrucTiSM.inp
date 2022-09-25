@@ -22,7 +22,7 @@ function bundle STSM_setup (const series y "Dependent variable",
 
     bundle self = default_model_bundle()
     if exists(model)
-        self = self + model
+        self = model + self
     endif
 
     check_seasonality(&self)
@@ -46,7 +46,6 @@ function bundle STSM_setup (const series y "Dependent variable",
 
     self.special_case_id = get_special_case_id(self)
 
-    *** HIER WEITERMACHEN ***
     prepare_system_matrices(&self)
 
     return self

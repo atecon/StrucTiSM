@@ -6,31 +6,30 @@ function scalar get_special_case_id (const bundle self)
     stochastic_slope = (self.type_slope == "stochastic")
     stochastic_season = stochastic_season_exists(self)
 
+    # TODO: I think the if-conditions may be simplified
     if !(stochastic_trend || stochastic_slope || stochastic_trend)
-    	if self.type_trend == "deterministic" && \
-            self.type_slope == "none" && \
-            self.n_seasonal_components == 0
+    	if stochastic_trend == FALSE && \
+            self.type_slope == "none" && self.n_seasonal_components == 0
     	    # case 1: just a constant + irregular
     	    ret = 1
 
-    	elif self.type_trend == "deterministic" && \
-            self.type_slope == "deterministic" && \
-            self.n_seasonal_components == 0
+    	elif stochastic_trend == FALSE && \
+            self.type_slope == "deterministic" && self.n_seasonal_components == 0
     	    # case 2: constant + trend + irregular
     	    ret = 2
 
-        elif self.type_trend == "deterministic" && \
+        elif stochastic_trend == FALSE && \
             self.type_slope == "none" && stochastic_season == FALSE
     	    # case 3: constant + seasonal dummies + irregular
     	    ret = 3
 
-        elif self.type_trend == "deterministic" && \
+        elif stochastic_trend == FALSE && \
             self.type_slope == "deterministic" && stochastic_season == FALSE
     	    # case 4: constant + trend + seasonal dummies + irregular
     	    ret = 4
     	endif
     endif
-    
+
     return ret
 end function
 
