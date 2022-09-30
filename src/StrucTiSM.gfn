@@ -13,6 +13,8 @@ pdfdoc:StrucTiSM.pdf
 </help>
 <data-files count="1">
 examples </data-files>
+<depends count="1">
+extra </depends>
 <gretl-function name="STSM_GUImeta" type="bundle" pkg-role="gui-main">
  <params count="9">
   <param name="y" type="series">
@@ -1079,25 +1081,6 @@ strings model.compdescs = compdescs
 return k
 </code>
 </gretl-function>
-<gretl-function name="qformvech" type="matrix" private="1">
- <params count="1">
-  <param name="X" type="matrix"/>
- </params>
-<code># vech(X'AX) = P (X ** X)' Q vech(A) = G vech(A)
-# this function returns G
-n = rows(X)
-m = round(n * (n+1) / 2)
-s = seq(1,m)
-matrix P = vec(upper(unvech(s'))) .= s
-n = cols(X)
-m = round(n * (n+1) / 2)
-s = seq(1,m)
-matrix Q = vec(upper(unvech(s'))) .= s
-matrix Q = Q || vec(lower(unvech(s'))) .= s
-matrix ret = P'(X ** X) * Q
-return ret
-</code>
-</gretl-function>
 <gretl-function name="get_special_case_id" type="scalar" private="1">
  <params count="1">
   <param name="self" type="bundle" const="true"/>
@@ -1537,7 +1520,7 @@ if example == k || example == -1
                                   type = &quot;dummy&quot;,\
                                   frequency = 7)
     self.seasonal.component_2 = _(stochastic = FALSE,\
-                                  type = &quot;dummy&quot;,\
+                                  type = &quot;trigonometric&quot;,\
                                   frequency = 365)
 
     model = STSM_setup(cnt, self)

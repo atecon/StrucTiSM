@@ -20,4 +20,5 @@ public = STSM_GUImeta STSM_GUIplot STSM_setup STSM_estimate \
        LLT BSM
 help = StrucTiSM.pdf
 sample-script = StrucTiSM_sample.inp
+depends = extra
 
