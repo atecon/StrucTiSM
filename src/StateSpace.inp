@@ -104,7 +104,7 @@ function matrix trigonometric_seasonality (const scalar pd)
         ret[H*2 + 1, H*2 + 1] = -1
     endif
 
-    return variable
+    return ret
 end function
 
 function matrix dummy_seasonality (const scalar pd)
@@ -115,10 +115,8 @@ function matrix dummy_seasonality (const scalar pd)
 end function
 
 
-# TODO: needs testing with different components + frequencies. E.g.
-# C1: freq=7, dummy, C2: freq=365, trigonometric
 function matrix Tseasonals (const bundle self)
-    /* Call actual function. */
+    /* Call actual function to construct seasonals for T matrix. */
 
     matrix ret
     strings components = getkeys(self.seasonal)
@@ -128,8 +126,7 @@ function matrix Tseasonals (const bundle self)
 
         if self.seasonal["@key"].type == "dummy"
             matrix seas = dummy_seasonality(self.seasonal["@key"].frequency)
-        elif
-            self.seasonal["@key"].type == "trigonometric"
+        elif self.seasonal["@key"].type == "trigonometric"
             matrix seas =  \
                 trigonometric_seasonality(self.seasonal["@key"].frequency)
         endif
@@ -167,10 +164,6 @@ function void initialize_system_matrices (bundle *self)
     /* Construct all necessary system matrices and add to self. */
     # int trend, int slope, int seasonal, scalar *nStates, scalar *nVar)
 
-    #matrices ret = array(3)
-    # in this order: T (statemat), Q (used for statevar)
-    # Z (obsmat)
-
     # Transition equation
     matrix self.Tmat = Tmat(self)
     scalar self.nStates = rows(self.Tmat)   # size of state vector
@@ -183,13 +176,18 @@ function void initialize_system_matrices (bundle *self)
     matrix self.Zmat = Zmat(self)
 
     if rows(self.Qmat) != self.nStates
-        print self
-        # sanity check
-        printf "Mismatch! (nStates = %d)\n", self.nStates
-        printf "statemat (T):\n%5.1f\n", self.Tmat
-        printf "Q:\n%5.1f\n", self.Qmat
-        printf "obsmat (Z):\n%5.1f\n", self.Zmat
+        print_sanity_check_results(self)
     endif
+end function
+
+
+function void print_sanity_check_results (const bundle self)
+    /* Print details for debugging. */
+
+    printf "Mismatch! (nStates = %d)\n", self.nStates
+    printf "statemat (T):\n%5.1f\n", self.Tmat
+    printf "Q:\n%5.1f\n", self.Qmat
+    printf "obsmat (Z):\n%5.1f\n", self.Zmat
 end function
 
 

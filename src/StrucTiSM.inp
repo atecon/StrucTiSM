@@ -4,17 +4,9 @@ include special_cases.inp
 include forecast.inp
 include StrucTiSM_GUI.inp
 
-# Index:
-# STSM_setup
-# STSM_estimate
-# STSM_fcast
-# STSM_printout
-# STSM_components
-# LLT
-# BSM
 
 function bundle STSM_setup (const series y "Dependent variable",
-                            const bundle model,
+                            const bundle model[null],
                             list xlist[null])
     /* Main function for setting up the model. */
 

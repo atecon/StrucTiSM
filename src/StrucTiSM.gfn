@@ -173,7 +173,7 @@ endif
   <param name="y" type="series" const="true">
 <description>Dependent variable</description>
   </param>
-  <param name="model" type="bundle" const="true"/>
+  <param name="model" type="bundle" optional="true" const="true"/>
   <param name="xlist" type="list" optional="true"/>
  </params>
 <code>/* Main function for setting up the model. */
@@ -579,7 +579,7 @@ endloop
 if !odd
   ret[H*2 + 1, H*2 + 1] = -1
 endif
-return variable
+return ret
 </code>
 </gretl-function>
 <gretl-function name="dummy_seasonality" type="matrix" private="1">
@@ -595,15 +595,14 @@ return -ones(1, pd-1) | (I(pd-2) ~ 0)
  <params count="1">
   <param name="self" type="bundle" const="true"/>
  </params>
-<code>/* Call actual function. */
+<code>/* Call actual function to construct seasonals for T matrix. */
 matrix ret
 strings components = getkeys(self.seasonal)
 loop i=1..nelem(components)
   string key = sprintf(&quot;component_%d&quot;, i)
   if self.seasonal[&quot;@key&quot;].type == &quot;dummy&quot;
     matrix seas = dummy_seasonality(self.seasonal[&quot;@key&quot;].frequency)
-  elif
-    self.seasonal[&quot;@key&quot;].type == &quot;trigonometric&quot;
+  elif self.seasonal[&quot;@key&quot;].type == &quot;trigonometric&quot;
     matrix seas = trigonometric_seasonality(self.seasonal[&quot;@key&quot;].frequency)
   endif
   if nelem(components) == 1
@@ -638,9 +637,6 @@ return ret
  </params>
 <code>/* Construct all necessary system matrices and add to self. */
 # int trend, int slope, int seasonal, scalar *nStates, scalar *nVar)
-#matrices ret = array(3)
-# in this order: T (statemat), Q (used for statevar)
-# Z (obsmat)
 # Transition equation
 matrix self.Tmat = Tmat(self)
 scalar self.nStates = rows(self.Tmat)   # size of state vector
@@ -650,13 +646,19 @@ self.nVar = cols(self.Qmat)
 # measurement equation: matrix of the state vector
 matrix self.Zmat = Zmat(self)
 if rows(self.Qmat) != self.nStates
-  print self
-  # sanity check
-  printf &quot;Mismatch! (nStates = %d)\n&quot;, self.nStates
-  printf &quot;statemat (T):\n%5.1f\n&quot;, self.Tmat
-  printf &quot;Q:\n%5.1f\n&quot;, self.Qmat
-  printf &quot;obsmat (Z):\n%5.1f\n&quot;, self.Zmat
+  print_sanity_check_results(self)
 endif
+</code>
+</gretl-function>
+<gretl-function name="print_sanity_check_results" type="void" private="1">
+ <params count="1">
+  <param name="self" type="bundle" const="true"/>
+ </params>
+<code>/* Print details for debugging. */
+printf &quot;Mismatch! (nStates = %d)\n&quot;, self.nStates
+printf &quot;statemat (T):\n%5.1f\n&quot;, self.Tmat
+printf &quot;Q:\n%5.1f\n&quot;, self.Qmat
+printf &quot;obsmat (Z):\n%5.1f\n&quot;, self.Zmat
 </code>
 </gretl-function>
 <gretl-function name="Zseasonals" type="matrix" private="1">
