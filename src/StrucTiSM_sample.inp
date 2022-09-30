@@ -43,8 +43,15 @@ if example == k || example == -1
     open bikesharing.gdt --quiet --preserve
 
     bundle self = _(error_in_obseq = TRUE) #,\
-
                     #type_trend = "stochastic")
+
+    bundle self.seasonal = null
+    self.seasonal.component_1 = _(stochastic = FALSE,\
+                                  type = "dummy",\
+                                  frequency = 7)
+    self.seasonal.component_2 = _(stochastic = FALSE,\
+                                  type = "trigonometric",\
+                                  frequency = 365)
 
     model = STSM_setup(cnt, self)
     scalar err = STSM_estimate(&model)

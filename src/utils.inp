@@ -4,7 +4,7 @@
 # inject
 # scale_series
 # adjust
-# parlabels
+# get_parameter_labels
 # specification
 # Xtract
 # add_states_to_model
@@ -78,8 +78,10 @@ function scalar stochastic_season_exists (const bundle self)
     scalar ret = 0
     strings components = getkeys(self.seasonal)
 
-    loop foreach i components
-        if self.seasonal["$i"].stochastic == TRUE
+    loop i=1..nelem(components)
+        string key = sprintf("component_%d", i)
+
+        if self.seasonal["@key"].stochastic == TRUE
             ret++
         endif
     endloop
@@ -217,70 +219,85 @@ function matrices adjust(matrix coeff, matrix vcv, scalar scale,
     return ret
 end function
 
-function strings parlabels(bool epsilon, int trend, int slope,
-                           int seasonal, bool has_exog)
-    strings ret = array(0)
-    if epsilon
-        ret += "Irregular"
-    endif
 
-    if trend == 1
-        ret += "Trend"
-    endif
+function strings get_seasonal_parameter_labels (const bundle self)
+    /* Construct parameter labels for seasonal components. */
 
-    if slope == 1
-        ret += "Slope"
-    endif
+    strings components = getkeys(self.seasonal)
+    strings ret = array(nelem(components))
 
-    if seasonal == 1
-        ret += "Seasonal (trig)"
-    elif seasonal == 2
-        ret += "Seasonal (dums)"
-    endif
+    loop i=1..nelem(components)
+        string key = sprintf("component_%d", i)
 
-    # if has_exog
-    #     ret += "Exogenous"
-    # endif
+        ret[i] = sprintf("Seasonal (%s, F=%.2f)",\
+                         self.seasonal["@key"].type,\
+                         self.seasonal["@key"].frequency)
+    endloop
 
     return ret
 end function
 
-function string specification(bool epsilon, int trend, int slope,
-                              int seasonal)
 
-    string ret = ""
+function strings get_parameter_labels (const bundle self)
+    /* Create array of parameter labels. */
 
-    if trend == 1
-        ret = "Stochastic trend"
-    elif trend == 2
-        ret = "Deterministic trend"
+    strings ret = array(0)
+
+    if self.error_in_obseq
+        ret += "Irregular"
     endif
 
-    if slope == 0
-        ret = ret ~ ", no slope"
-    elif slope == 1
-        ret = ret ~ ", stochastic slope"
-    elif slope == 2
-        ret = ret ~ ", deterministic slope"
+    ret += sprintf("Trend (%s)", self.type_trend)
+
+    if self.type_slope != "none"
+        ret += sprintf("Slope (%s)", self.type_slope)
     endif
 
-    if seasonal == 1
-        ret = ret ~ ", trigonometric seasonals"
-    elif seasonal == 2
-        ret = ret ~ ", dummy seasonals (stoch.)"
-    elif seasonal == 3
-        ret = ret ~ ", dummy seasonals (det.)"
-    endif
+    ret += get_seasonal_parameter_labels(self)
 
-    if epsilon
-        if strlen(ret) > 50
-            ret = sprintf("%s,\nirregular component", ret)
-        else
-            ret = ret ~ ", irregular component"
-        endif
+    if self.nexog > 0
+        ret += self.xnames
     endif
 
     return ret
+end function
+
+function void print_specification_seasonal (const bundle self)
+    /* Print specification for seasonals. */
+
+    strings components = getkeys(self.seasonal)
+
+    loop i=1..nelem(components)
+        string key = sprintf("component_%d", i)
+
+        string s = self.seasonal["@key"].stochastic == TRUE ? \
+                   "stochastic" : "deterministic"
+
+        printf ", seasonal"
+        if nelem(components) > 1
+            printf " (%d)", i
+        endif
+        printf ": %s (%s, F=%.2f)",\
+            s, self.seasonal["@key"].type, self.seasonal["@key"].frequency
+    endloop
+end function
+
+
+function void print_specification (const bundle self)
+    /* Print specification. */
+
+    printf "\n\nSpecification:\n"
+    printf "================\n"
+
+    printf "Trend: %s", self.type_trend
+    printf ", slope: %s", self.type_slope
+
+    print_specification_seasonal(self)
+
+    if self.error_in_obseq
+            printf "\n, irregular component"
+    endif
+    printf "\n\n"
 end function
 
 function matrix Xtract(int slope, int seasonal, scalar pd)
