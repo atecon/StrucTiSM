@@ -422,24 +422,3 @@ function scalar add_states_to_model(bundle *model, const matrix J)
 
     return k
 end function
-
-/*
-function matrix qformvech(matrix X)
-    # vech(X'AX) = P (X ** X)' Q vech(A) = G vech(A)
-    # this function returns G
-
-    n = rows(X)
-    m = round(n * (n+1) / 2)
-    s = seq(1,m)
-    matrix P = vec(upper(unvech(s'))) .= s
-
-    n = cols(X)
-    m = round(n * (n+1) / 2)
-    s = seq(1,m)
-    matrix Q = vec(upper(unvech(s'))) .= s
-    matrix Q = Q || vec(lower(unvech(s'))) .= s
-
-    matrix ret = P'(X ** X) * Q
-    return ret
-end function
-*/
