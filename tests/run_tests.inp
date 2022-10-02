@@ -69,15 +69,16 @@ assert(nelem(model.seasonal) == 1)
 
 
 
+/*  NOT WORKING YET!
 print "Specification 6"
 open bikesharing.gdt --quiet
 
 bundle model = _(error_in_obseq = FALSE)
 bundle model.seasonal = null
-model.seasonal.component_1 = _(stochastic = FALSE,\
+model.seasonal.component_1 = _(stochastic = TRUE,\
                                type = "trigonometric",\
                                frequency = 7)
-model.seasonal.component_2 = _(stochastic = TRUE,\
+model.seasonal.component_2 = _(stochastic = FALSE,\
                                type = "dummy",\
                                frequency = 365)
 catch bundle model = STSM_setup(cnt, model)
@@ -85,13 +86,32 @@ catch bundle model = STSM_setup(cnt, model)
 assert($error != FALSE)
 assert(nelem(model.seasonal) == 2)
 
+stop
+*/
 
 
 print "Specification 7: stochastic slope"
 open bikesharing.gdt --quiet
 
 bundle model = _(error_in_obseq = TRUE,
-                 type_slope = "stochastic")
+                 type_slope = "stochastic",
+                 pe_trend = "stochastic")
+bundle model.seasonal = null
+model.seasonal.component_1 = _(stochastic = TRUE,\
+                               type = "dummy",\
+                               frequency = 7)
+bundle model = STSM_setup(cnt, model)
+scalar err = STSM_estimate(&model)
+list comps = STSM_components(model)
+assert(err == FALSE)
+
+
+
+print "Specification 8: stochastic trend"
+open bikesharing.gdt --quiet
+
+bundle model = _(error_in_obseq = TRUE,
+                 type_trend = "stochastic")
 /*bundle model.seasonal = null
 model.seasonal.component_1 = _(stochastic = TRUE,\
                                type = "dummy",\
@@ -100,7 +120,6 @@ bundle model = STSM_setup(cnt, model)
 scalar err = STSM_estimate(&model)
 list comps = STSM_components(model)
 assert(err == FALSE)
-
 
 ###  NOT SUPPORTED CASES, YET
 

@@ -64,7 +64,6 @@ function scalar STSM_estimate (bundle *self,
     errorif(self.nVar == 0 && self.error_in_obseq == FALSE,\
             "No variances to estimate!")
 
-    scalar has_exog = (self.nexog > 0)
     scalar self.mapping = mapping
     scalar self.vcvmethod = vcvmethod
 
@@ -88,50 +87,43 @@ function scalar STSM_estimate (bundle *self,
     bundle Model = create_model_object(self)
     matrix Model.inistate = get_initial_state(Model, self)
 
-
-    if has_exog > 0
-        matrix y = mod.depvar
-        matrix X = mod.mX
-        Model.obsx = X
-        matrix beta = mols(diff(y), diff(X)) #.* scale
-        psi = psi | beta
+    if self.nexog > 0
+        matrix Model.obsxmat = ols_exogenous(self)
+        matrix Model.obsx = self.mX
     endif
 
-    # ML estimation ---------------------------------------------------------
-    # test run
-    err = inject(psi, &Model, self.error_in_obseq, nVar, self.Qmat, mapping, nexog)
-    err = err || kfilter(&Model)
 
-    errorif( err, "ML init failed!")
-        # return 2 # E_DATA
-    # else
-        if verbose > 1
-            printf "Init OK\n"
-        endif
-        series ll = Model.llt
-    # endif
+    # TODO: Would be nice to outsource the following estimation
 
+    # ML estimation: test run
+    inject(self, &Model)
+    scalar err = kfilter(&Model)
+    errorif(err, "ML initialization failed!") # TODO: return 2 # E_DATA
+    if self.verbose > 1
+        printf "Initialization successful.\n"
+    endif
+    series ll = Model.llt
+
+    # ML estimation: actual run
     set lbfgs on # seems to perform better than plain BFGS
 
     catch mle ll = err ? NA : misszero(ll)
-        err = inject(psi, &Model, self.error_in_obseq, nVar, self.Qmat, mapping, nexog)
+        err = inject(self, &Model)
         err = err || kfilter(&Model)
         series ll = Model.llt
-        params psi
+        params self.psi
     end mle
-    scalar err1 = $error
+    scalar err_block = $error
 
-    if err1
-        printf "error! %s\n", errmsg(err1)
-        return err1
+    if err_block
+        printf "error! %s\n", errmsg(err_block)
+        return err_block
     endif
 
-    # --- mle done; now pack the results nicely ---------------------
-
-    matrices results = adjust($coeff, $vcv, scale, mapping, nexog)
-    mod.coeff = results[1]
-    mod.vcv = results[2]
-    mod.llt = {ll} - ln(scale)
+    matrix self.llt = {ll} - ln(self.y_scaling_factor)
+    bundle Btmp = remap_coefficients($coeff, $vcv, self)
+    matrix self.coeff = Btmp.coeff
+    matrix self.vcv = Btmp.vcv
 
     if self.verbose
         STSM_printout(&self)

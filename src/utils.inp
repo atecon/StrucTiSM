@@ -132,18 +132,18 @@ end function
 ###
 
 function matrix reparm (const matrix psi,
-                        int option[0:2:1],
+                        int mapping[0:2:1],
                         bool inverse[0])
+    /* This function returns _variances_ for given parameters.
+    Options are: 0 = abs, 1 = square, 2 = exp */
+
     set warnings off
-    # this function returns _variances_ given params
-    # option: 0 = abs 1 = square 2 = exp
+    matrix ret
 
-    matrix ret = {}
-
-    if option == 1
+    if mapping == 1
         # what goes into mle is std. devs
         ret = inverse ? sqrt(psi) : psi.^2
-    elif option == 2
+    elif mapping == 2
         # what goes into mle is log variances
         ret = inverse ? ln(psi) : exp(psi)
     else
@@ -151,36 +151,29 @@ function matrix reparm (const matrix psi,
         ret = abs(psi)
     endif
 
-
     return ret
 end function
 
 
-function scalar inject (matrix theta,
-                        bundle *kmod,
-                        bool eps,
-                        scalar nVar,
-                        const matrix R,
-                        scalar mapping,
-                        scalar nexog)
+function scalar inject (const bundle self,
+                        bundle *model)
     /* This function injects the mle parameters into the Kalman bundle,
-    given the characteristics of the model
-    return: an error value. */
+    given the characteristics of the model. */
 
-    scalar err = 0
-    ini = 1
-    if eps
-        kmod.obsvar = reparm(theta[1], mapping)
-        ini++
-    endif
-    fin = ini + nVar - 1
+    scalar err = FALSE   # TODO: Just a dummy needed for mle block?
+    scalar init = self.error_in_obseq == TRUE ? 2 : 1
 
-    kmod.statevar[diag] = R * reparm(theta[ini:fin], mapping)
-    if nexog > 0
-        ini = fin + 1
-        fin = fin + nexog
-        kmod.obsxmat = theta[ini:fin]
+    if self.error_in_obseq
+        # [1]: irregular component is always positioned first
+        model.obsvar = reparm(self.psi[1], self.mapping)
     endif
+
+    model.statevar[diag] = self.Qmat * reparm(self.psi[init:], self.mapping)
+
+    if self.nexog > 0
+        model.obsxmat = self.psi_exogenous
+    endif
+
     return err
 end function
 
@@ -199,36 +192,44 @@ function series scale_series (const series y,
     return ret
 end function
 
-function matrices adjust(matrix coeff, matrix vcv, scalar scale,
-                         int mapping, scalar nexog)
-    # this function re-maps the parameters used in "mle" into standard
-    # deviations, in the orginal unit of measurement; ret[1] contains the
-    # parameters, ret[2] their vcv (computed via the delta method)
 
-    matrices ret = array(2)
-    k = rows(coeff) - nexog
-    vc = coeff[1:k]
-    se_unscaled = sqrt(reparm(vc, mapping))
-    ret[1] = se_unscaled * scale
+
+function bundle remap_coefficients (const matrix coeff,
+                                    const matrix vcv,
+                                    const bundle self)
+    /* Tis function re-maps the parameters used in "mle" into standard
+    deviations, in the orginal unit of measurement.
+    ret[1] contains the parameters, ret[2] their vcv
+    (computed via the delta method). */
+
+    bundle B
+
+    scalar k = rows(coeff) - self.nexog
+    matrix vc = coeff[1:k]
+    matrix se_unscaled = sqrt(reparm(vc, self.mapping))
+    matrix se_scaled = se_unscaled * self.y_scaling_factor
 
     # the Jacobian
-    if mapping == 0
-        matrix J = 0.5 * scale ./ se_unscaled
-    elif mapping == 1
-        matrix J = mshape(scale, k, 1)
-    elif mapping == 2
-        matrix J = 0.5 .* ret[1]
+    if self.mapping == 0
+        matrix J = 0.5 * self.y_scaling_factor ./ se_unscaled
+    elif self.mapping == 1
+        matrix J = mshape(self.y_scaling_factor, k, 1)
+    elif self.mapping == 2
+        matrix J = 0.5 .* se_scaled
     endif
 
-    ret[2] = vcv[1:k,1:k] .* (J*J')
+    matrix vcv_scaled = vcv[1:k,1:k] .* (J*J')
 
-    if nexog
-        betas = coeff[k+1:k+nexog] * scale
-        ret[1] |= betas
-        ret[2] = diagcat(ret[2], scale^2 * vcv[k+1:k+nexog,k+1:k+nexog])
+    if self.nexog
+        ini = k + 1
+        fini = k+nexog
+
+        se_scaled |= coeff[ini:fini] * self.y_scaling_factor
+        vcv_scaled = diagcat(vcv_scaled,\
+                             self.y_scaling_factor^2 * vcv[ini:fini,ini:fini])
     endif
 
-    return ret
+    return _(coeff = se_scaled, vcv = vcv_scaled)
 end function
 
 
@@ -433,4 +434,16 @@ function scalar add_states_to_model(bundle *model, const matrix J)
     strings model.compdescs = compdescs
 
     return k
+end function
+
+
+function matrix ols_exogenous (const bundle self)
+    /* Estimate effect of exogenous on endogenous.
+    return: matrix, vector of point estimates. */
+
+    matrix y = diff(self.depvar)
+    matrix X = diff(self.mX)
+    matrix coeff = mols(y, X)   # TODO: Is scaling needed? ".* scale"
+
+    return coeff
 end function
