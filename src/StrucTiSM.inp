@@ -132,11 +132,13 @@ function scalar STSM_estimate (bundle *self,
     scalar err = ksmooth(&Model)
     errorif(err, sprintf("Smoothing failed! (%s)", errmsg(err)))
     
-    self.St = Model.state * self.y_scaling_factor
+    self.state = Model.state * self.y_scaling_factor
+
+    *** HIER WEITERMACHEN
 
     # take care of the unobserved components
-    J = Xtract(self.slope, self.seasonal, self.pd)
-    k = add_states_to_model(&mod, J)
+    J = Xtract(self.type_slope, self.seasonal, self.pd)
+    k = add_states_to_model(&self, J)
     J = qformvech(J)
     dg = diag(unvech(seq(1,cols(J))'))
     self.stSE = sqrt(Model.stvar * J[,dg]) * scale

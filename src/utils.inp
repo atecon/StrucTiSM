@@ -313,12 +313,12 @@ function void print_specification (const bundle self)
     printf "\n\n"
 end function
 
-function matrix Xtract(int slope, int seasonal, scalar pd)
 
-    # this function creates an n x k matrix, which extracts
-    # the components to export from the state vector
+function matrix Xtract (int slope, int seasonal, scalar pd)
+    /* This function creates an n x k matrix, which extracts the components
+    to export from the state vector the level is always there, either
+    deterministic or stochastic. */
 
-    # the level is always there, either deterministic or stochastic
     matrix ret = {1}
 
     if slope > 0
