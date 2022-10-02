@@ -555,7 +555,8 @@ else
   # nothing to do if no slope is requested
 endif
 ret = diagcat(ret, Qseasonals(self))
-return selifc(ret, maxc(ret) .&gt; 0)
+ret = selifc(ret, maxc(ret) .&gt; 0)
+return ret
 </code>
 </gretl-function>
 <gretl-function name="trigonometric_seasonality" type="matrix" private="1">
@@ -713,10 +714,10 @@ string self.type_trend = &quot;deterministic&quot;   # {&quot;stochastic&quot; &
 string self.type_slope = &quot;none&quot;  # {&quot;none&quot; &quot;stochastic&quot; &quot;deterministic&quot;}
 scalar self.pd = $pd
 bundle self.seasonal = null
-bundle self.seasonal.component_1 = null
-scalar self.seasonal.component_1.stochastic = FALSE
-string self.seasonal.component_1.type = &quot;dummy&quot;    # {&quot;dummy&quot;, &quot;trigonometric&quot;}
-scalar self.seasonal.component_1.frequency = $pd
+#bundle self.seasonal.component_1 = null
+#scalar self.seasonal.component_1.stochastic = FALSE
+#string self.seasonal.component_1.type = &quot;dummy&quot;    # {&quot;dummy&quot;, &quot;trigonometric&quot;}
+# scalar self.seasonal.component_1.frequency = $pd
 scalar self.nStates = NA
 scalar self.nVar = NA       # number of variances to estimate
 scalar self.y_scaling_factor = NA
@@ -728,9 +729,9 @@ return self
   <param name="self" type="bundleref"/>
  </params>
 <code>/* Check if dataset has seasonality. If not, reset seasonal bundle. */
-if nelem(self.seasonal.component_1) &gt; 0 &amp;&amp; ($pd == 1)
-  print &quot;The dataset has no seasonality. Specified seasonality will be ignored.&quot;
-  self.seasonal.component_1 = null
+if $pd == 1
+  print &quot;The dataset has no seasonality. Eventuall specified seasonality will be ignored.&quot;
+  bundle self.seasonal = null
 endif
 </code>
 </gretl-function>
@@ -1517,13 +1518,13 @@ if example == k || example == -1
     bundle self = _(error_in_obseq = TRUE) #,\
                     #type_trend = &quot;stochastic&quot;)
 
-    bundle self.seasonal = null
+    /*bundle self.seasonal = null
     self.seasonal.component_1 = _(stochastic = FALSE,\
                                   type = &quot;dummy&quot;,\
                                   frequency = 7)
     self.seasonal.component_2 = _(stochastic = FALSE,\
                                   type = &quot;trigonometric&quot;,\
-                                  frequency = 365)
+                                  frequency = 365)*/
 
     model = STSM_setup(cnt, self)
     scalar err = STSM_estimate(&amp;model)

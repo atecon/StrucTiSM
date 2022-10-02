@@ -51,7 +51,6 @@ function matrix Qseasonals (const bundle self)
 end function
 
 
-
 function matrix Qmat (const bundle self)
     /* This function returns a matrix mapping the stochastic shocks into the
      state transition variance matrix: it has as many rows as the dimension
@@ -75,8 +74,9 @@ function matrix Qmat (const bundle self)
     endif
 
     ret = diagcat(ret, Qseasonals(self))
+    ret = selifc(ret, maxc(ret) .> 0)
 
-    return selifc(ret, maxc(ret) .> 0)
+    return ret
 end function
 
 
@@ -237,4 +237,32 @@ function matrix Zmat (const bundle self)
     Z |= Zseasonals(self)
 
    return Z
+end function
+
+
+function bundle create_model_object (const bundle self)
+    /* Create model object by means of the built-in ksetup() function. */
+
+    # TODO: Why do we initiate Q by zeros? We already have a self.Qmat?
+    return ksetup(self.depvar, self.Zmat, self.Tmat,
+                  zeros(self.nStates, self.nStates))
+end function
+
+
+function matrix get_initial_state (const bundle Model, const bundle self)
+    /* Get initial state.
+    return: matrix, initialized states. */
+
+    # --- experimental -----------------
+    # in the future, we may want to set the initial state for the
+    # level as an extra parameter for mle
+
+    matrix ret = zeros(self.nStates, 1)
+    ret[1] = meanc(self.depvar[1:$pd])
+
+    if self.verbose > 1
+        printf "Initial state:\n%g\n", ret
+    endif
+
+    return ret
 end function

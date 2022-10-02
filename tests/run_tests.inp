@@ -15,8 +15,6 @@ scalar err = STSM_estimate(&model)
 list comps = STSM_components(model)
 assert(err == FALSE)
 
-
-
 print "Specification 2"
 open bikesharing.gdt --quiet
 
@@ -25,7 +23,7 @@ bundle model = STSM_setup(cnt, model)
 scalar err = STSM_estimate(&model)
 list comps = STSM_components(model)
 assert(err == FALSE)
-
+assert(nelem(model.seasonal) == 0)
 
 
 print "Specification 3"
@@ -36,6 +34,7 @@ bundle model = STSM_setup(cnt, model)
 scalar err = STSM_estimate(&model)
 list comps = STSM_components(model)
 assert(err == FALSE)
+assert(nelem(model.seasonal) == 0)
 
 
 
@@ -51,7 +50,7 @@ bundle model = STSM_setup(cnt, model)
 scalar err = STSM_estimate(&model)
 list comps = STSM_components(model)
 assert(err == FALSE)
-
+assert(nelem(model.seasonal) == 1)
 
 
 print "Specification 5"
@@ -66,6 +65,7 @@ bundle model = STSM_setup(cnt, model)
 scalar err = STSM_estimate(&model)
 list comps = STSM_components(model)
 assert(err == FALSE)
+assert(nelem(model.seasonal) == 1)
 
 
 
@@ -83,25 +83,28 @@ model.seasonal.component_2 = _(stochastic = TRUE,\
 catch bundle model = STSM_setup(cnt, model)
 # non-stochastic trigonometric seasonality not supported
 assert($error != FALSE)
+assert(nelem(model.seasonal) == 2)
 
+
+
+print "Specification 7: stochastic slope"
+open bikesharing.gdt --quiet
+
+bundle model = _(error_in_obseq = TRUE,
+                 type_slope = "stochastic")
+/*bundle model.seasonal = null
+model.seasonal.component_1 = _(stochastic = TRUE,\
+                               type = "dummy",\
+                               frequency = 7)*/
+bundle model = STSM_setup(cnt, model)
+scalar err = STSM_estimate(&model)
+list comps = STSM_components(model)
+assert(err == FALSE)
 
 
 ###  NOT SUPPORTED CASES, YET
 
 /*
-
-print "Specification 4+"
-open bikesharing.gdt --quiet
-
-bundle model = _(error_in_obseq = TRUE)
-bundle model.seasonal = null
-model.seasonal.component_1 = _(stochastic = TRUE,\
-                               type = "dummy",\
-                               frequency = 7)
-bundle model = STSM_setup(cnt, model)
-scalar err = STSM_estimate(&model)
-list comps = STSM_components(model)
-assert(err == FALSE)
 
 
 

@@ -11,10 +11,10 @@ function bundle default_model_bundle (void)
     scalar self.pd = $pd
 
     bundle self.seasonal = null
-    bundle self.seasonal.component_1 = null
-    scalar self.seasonal.component_1.stochastic = FALSE
-    string self.seasonal.component_1.type = "dummy"    # {"dummy", "trigonometric"}
-    scalar self.seasonal.component_1.frequency = $pd
+    #bundle self.seasonal.component_1 = null
+    #scalar self.seasonal.component_1.stochastic = FALSE
+    #string self.seasonal.component_1.type = "dummy"    # {"dummy", "trigonometric"}
+    # scalar self.seasonal.component_1.frequency = $pd
 
     scalar self.nStates = NA
     scalar self.nVar = NA       # number of variances to estimate
@@ -27,9 +27,9 @@ end function
 function void check_seasonality (bundle *self)
     /* Check if dataset has seasonality. If not, reset seasonal bundle. */
 
-    if nelem(self.seasonal.component_1) > 0 && ($pd == 1)
-        print "The dataset has no seasonality. Specified seasonality will be ignored."
-        self.seasonal.component_1 = null
+    if $pd == 1
+        print "The dataset has no seasonality. Eventuall specified seasonality will be ignored."
+        bundle self.seasonal = null
     endif
 end function
 
@@ -105,12 +105,35 @@ function scalar set_horizon(void)
 end function
 
 
+function matrix get_initial_psi_parameters (const bundle self)
+    /* Initialize parameters to estimate. */
+
+    if self.mapping == 2    # logarithmic case
+        return zeros(self.nVar + self.error_in_obseq, 1)
+    endif
+    # TODO: WHY multiply by '4'?
+    scalar a = get_initial_stdveps_parameter(self.mapping)
+    return ones(self.nVar + self.error_in_obseq, 1) .* a
+end function
+
+
+function scalar get_initial_stdveps_parameter (const scalar mapping)
+    /* Initialize parameters to estimate. */
+
+    if mapping == 2    # logarithmic case
+        return 0
+    else
+        return 4
+    endif
+end function
+
 ###
 ### Variance estimation: from (-infty, infty) to (0, infty) and vice versa
 ###
 
-function matrix reparm( const matrix psi, int option[0:2:1],
-                       bool inverse[0])
+function matrix reparm (const matrix psi,
+                        int option[0:2:1],
+                        bool inverse[0])
     set warnings off
     # this function returns _variances_ given params
     # option: 0 = abs 1 = square 2 = exp
@@ -132,12 +155,17 @@ function matrix reparm( const matrix psi, int option[0:2:1],
     return ret
 end function
 
-function scalar inject(matrix theta, bundle *kmod, bool eps,
-                       scalar nVar, const matrix R, scalar mapping,
-                       scalar nexog)
 
-    # this function injects the mle parameters into the Kalman bundle,
-    # given the characteristics of the model; returns an error value
+function scalar inject (matrix theta,
+                        bundle *kmod,
+                        bool eps,
+                        scalar nVar,
+                        const matrix R,
+                        scalar mapping,
+                        scalar nexog)
+    /* This function injects the mle parameters into the Kalman bundle,
+    given the characteristics of the model
+    return: an error value. */
 
     scalar err = 0
     ini = 1

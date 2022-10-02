@@ -21,7 +21,7 @@ function bundle STSM_setup (const series y "Dependent variable",
     scalar self.n_seasonal_components = nelem(getkeys(self.seasonal))
 
     string self.depvarname = !strlen(argname(y)) ? "Y" : argname(y)
-    xlist -= const # just in case
+    xlist -= const
 
     self = self + get_sample_details(y, xlist)
     errorif(self.sample_start_index == self.sample_end_index,\
@@ -48,62 +48,46 @@ end function
 function scalar STSM_estimate (bundle *self,
                                int mapping[0:2:1],
                                int vcvmethod[0:2:1])
-    /* Main function for estimation of the specified model. */
+    /* Estimates the variances of the model and performs the state smoothing.
+    return: Error code, FALSE in case of no error, otherwise TRUE. */
     # mapping: Reparametrisation (0 = Variances, 1 = Std. Dev (def), 2 = log)
     # vcvmethod: 0 = opg, 1 = Hessian (def), 2 = robust
 
     smpl self.sample_start_index self.sample_end_index
     set warnings off
 
-    scalar has_exog = (self.nexog > 0)
-    self.mapping = mapping
-
     if self.special_case_id
         estimate_special_case(&self)
         return FALSE
     endif
 
-    # FIXME: The following part is untested, yet!
-
     errorif(self.nVar == 0 && self.error_in_obseq == FALSE,\
             "No variances to estimate!")
 
-    matrices SysMat = self.SysMat
+    scalar has_exog = (self.nexog > 0)
+    scalar self.mapping = mapping
+    scalar self.vcvmethod = vcvmethod
 
-    # parameters to estimate
+    matrix self.psi = get_initial_psi_parameters(self)
+    scalar self.stdveps = get_initial_stdveps_parameter(self.mapping)
 
-    if mapping == 2
-        matrix psi = zeros(nVar + self.error_in_obseq, 1)
-        stdveps = 0
-    else
-        a = 4
-        matrix psi = ones(nVar + self.error_in_obseq, 1) .* a
-        stdveps = a
-    endif
-
-    if verbose == 0 || verbose == 1
+    # TODO: Try to outsource
+    if self.verbose < 2
         setopt mle --quiet
-    elif verbose == 2
+    else
         setopt mle --verbose
     endif
 
-    if vcvmethod == 1
+    # TODO: Try to outsource
+    if self.vcvmethod == 1
         setopt mle --hessian
-    elif vcvmethod == 2
+    elif self.vcvmethod == 2
         setopt mle --robust
     endif
 
-    # Define the model ------------------------------------------------------
-    bundle Model = ksetup(mod.depvar, SysMat[3], SysMat[1], zeros(nStates, nStates))
-    matrix R = SysMat[2]
+    bundle Model = create_model_object(self)
+    matrix Model.inistate = get_initial_state(Model, self)
 
-    # --- experimental -----------------
-    # in the future, we may want to set the initial state for the
-    # level as an extra parameter for mle
-    Model.inistate = zeros(nStates, 1)
-    Model.inistate[1] = meanc(mod.depvar[1:$pd])
-    # printf "inistate:\n%g\n", Model.inistate
-    # ---------------------------------
 
     if has_exog > 0
         matrix y = mod.depvar
@@ -115,7 +99,7 @@ function scalar STSM_estimate (bundle *self,
 
     # ML estimation ---------------------------------------------------------
     # test run
-    err = inject(psi, &Model, self.error_in_obseq, nVar, R, mapping, nexog)
+    err = inject(psi, &Model, self.error_in_obseq, nVar, self.Qmat, mapping, nexog)
     err = err || kfilter(&Model)
 
     errorif( err, "ML init failed!")
@@ -130,7 +114,7 @@ function scalar STSM_estimate (bundle *self,
     set lbfgs on # seems to perform better than plain BFGS
 
     catch mle ll = err ? NA : misszero(ll)
-        err = inject(psi, &Model, self.error_in_obseq, nVar, R, mapping, nexog)
+        err = inject(psi, &Model, self.error_in_obseq, nVar, self.Qmat, mapping, nexog)
         err = err || kfilter(&Model)
         series ll = Model.llt
         params psi
