@@ -5,6 +5,7 @@ session.inp
 *.log
 *.aux
 *.bbl
+*.blg
 
 # Get created after make command
 src/doc/*
