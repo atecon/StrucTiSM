@@ -1,5 +1,11 @@
 session.inp
 .Rhistory
+
+# Latex
 *.log
 *.aux
 *.bbl
+
+# Get created after make command
+src/doc/*
+src/examples/*

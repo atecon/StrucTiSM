@@ -134,7 +134,7 @@ function scalar STSM_estimate (bundle *self,
     
     self.state = Model.state * self.y_scaling_factor
 
-    *** HIER WEITERMACHEN
+#    *** HIER WEITERMACHEN
 
     # take care of the unobserved components
     J = Xtract(self.type_slope, self.seasonal, self.pd)
