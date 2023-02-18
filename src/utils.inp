@@ -65,7 +65,7 @@ function scalar stochastic_season_exists (const bundle self)
     loop i=1..nelem(components)
         string key = sprintf("component_%d", i)
 
-        if self.seasonal_info["@key"].stochastic == TRUE
+        if self.seasonal_info[key].stochastic == TRUE
             ret++
         endif
     endloop
@@ -242,8 +242,8 @@ function strings get_seasonal_parameter_labels (const bundle self)
         string key = sprintf("component_%d", i)
 
         ret[i] = sprintf("Seasonal (%s, F=%.2f)",\
-                         self.seasonal_info["@key"].type,\
-                         self.seasonal_info["@key"].frequency)
+                         self.seasonal_info[key].type,\
+                         self.seasonal_info[key].frequency)
     endloop
 
     return ret
@@ -282,7 +282,7 @@ function void print_specification_seasonal (const bundle self)
     loop i=1..nelem(components)
         string key = sprintf("component_%d", i)
 
-        string s = self.seasonal_info["@key"].stochastic == TRUE ? \
+        string s = self.seasonal_info[key].stochastic == TRUE ? \
                    "stochastic" : "deterministic"
 
         printf ", seasonal"
@@ -290,7 +290,7 @@ function void print_specification_seasonal (const bundle self)
             printf " (%d)", i
         endif
         printf ": %s (%s, F=%.2f)",\
-            s, self.seasonal_info["@key"].type, self.seasonal_info["@key"].frequency
+            s, self.seasonal_info[key].type, self.seasonal_info[key].frequency
     endloop
 end function
 
@@ -334,14 +334,14 @@ function matrix Xtract (const bundle self)
 
     loop i=1..nelem(components)
         string key = sprintf("component_%d", i)
-        scalar pd_factor = self.seasonal_info["@key"].frequency
+        scalar pd_factor = self.seasonal_info[key].frequency
 
-        if self.seasonal_info["@key"].stochastic == TRUE && \
-           self.seasonal_info["@key"].type == "trigonometric"
+        if self.seasonal_info[key].stochastic == TRUE && \
+           self.seasonal_info[key].type == "trigonometric"
 
             ret = diagcat(ret, mshape({1,0}, (pd_factor - 1), 1))
 
-        elif self.seasonal_info["@key"].type == "dummy"
+        elif self.seasonal_info[key].type == "dummy"
             ret = diagcat(ret, 1 | zeros((pd_factor - 2), 1))
         endif
     endloop
@@ -361,7 +361,7 @@ function scalar add_states_to_model (bundle *self, const matrix J)
 
     strings component_names = null
     strings component_descriptions = null
-    scalar k = 1
+    scalar ncomponents = 1
 
     smpl self.sample_start_index self.sample_end_index
 
@@ -388,15 +388,15 @@ function scalar add_states_to_model (bundle *self, const matrix J)
 
     # do the slope, if present ---------------------------------
     if self.type_slope == "stochastic"
-        k++
+        ncomponents++
         sername = name ~ "_slope"
-        genseries(sername, stateJ[,k])
+        genseries(sername, stateJ[,ncomponents])
         component_names += sername
         component_descriptions += "Slope"
         self[sername] = @sername
     elif self.type_slope == "deterministic"
         # just skip the deterministic slope
-        k++
+        ncomponents++
     endif
 
     # do the seasonal(s), if present ------------------------------
@@ -404,19 +404,19 @@ function scalar add_states_to_model (bundle *self, const matrix J)
         strings components = getkeys(self.seasonal_info)
 
         loop i=1..nelem(components)
-            k++
+            ncomponents++
             string key = sprintf("component_%d", i)
 
             string sername = sprintf("%s_seas%d",
                                      name,
-                                     self.seasonal_info["@key"].frequency)
+                                     self.seasonal_info[key].frequency)
 
-            genseries(sername, stateJ[,k])
+            genseries(sername, stateJ[,ncomponents])
             component_names += sername
-            string desc = self.seasonal_info["@key"].stochastic ? \
+            string desc = self.seasonal_info[key].stochastic ? \
                           ", stochastic" : ""
             component_descriptions += sprintf("Seasonal (%s%s)",
-                                 self.seasonal_info["@key"].type,
+                                 self.seasonal_info[key].type,
                                  desc)
             self[sername] = @sername
             if self.error_in_obseq
@@ -427,7 +427,7 @@ function scalar add_states_to_model (bundle *self, const matrix J)
 
     # do the exogenous component, if present ---------------------
     if self.nexog >= 1
-        k++
+        ncomponents++
         nVar = self.nVar
         sername = name ~ "_exo"
 
@@ -443,7 +443,7 @@ function scalar add_states_to_model (bundle *self, const matrix J)
 
     # finalise the irregular component, if present --------------
     if self.error_in_obseq
-        k++
+        ncomponents++
         sername = name ~ "_irreg"
         genseries(sername, eps)
         component_names += sername
@@ -455,7 +455,7 @@ function scalar add_states_to_model (bundle *self, const matrix J)
     strings self.component_names = component_names
     strings self.component_descriptions = component_descriptions
 
-    return k
+    return ncomponents
 end function
 
 
