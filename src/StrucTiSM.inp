@@ -137,11 +137,11 @@ function scalar STSM_estimate (bundle *self,
 #    *** HIER WEITERMACHEN
 
     # take care of the unobserved components
-    J = Xtract(self.type_slope, self.seasonal_info, self.pd)
+    J = Xtract(self)
     k = add_states_to_model(&self, J)
     J = qformvech(J)
-    dg = diag(unvech(seq(1,cols(J))'))
-    self.stSE = sqrt(Model.stvar * J[,dg]) * scale
+    dg = diag(unvech(seq(1, cols(J))'))
+    self.stSE = sqrt(Model.stvar * J[,dg]) * self.y_scaling_factor
 
     return 0
 
