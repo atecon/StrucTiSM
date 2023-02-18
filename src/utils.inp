@@ -10,11 +10,11 @@ function bundle default_model_bundle (void)
     string self.type_slope = "none"  # {"none" "stochastic" "deterministic"}
     scalar self.pd = $pd
 
-    bundle self.seasonal = null
-    #bundle self.seasonal.component_1 = null
-    #scalar self.seasonal.component_1.stochastic = FALSE
-    #string self.seasonal.component_1.type = "dummy"    # {"dummy", "trigonometric"}
-    # scalar self.seasonal.component_1.frequency = $pd
+    bundle self.seasonal_info = null
+    #bundle self.seasonal_info.component_1 = null
+    #scalar self.seasonal_info.component_1.stochastic = FALSE
+    #string self.seasonal_info.component_1.type = "dummy"    # {"dummy", "trigonometric"}
+    # scalar self.seasonal_info.component_1.frequency = $pd
 
     scalar self.nStates = NA
     scalar self.nVar = NA       # number of variances to estimate
@@ -29,7 +29,7 @@ function void check_seasonality (bundle *self)
 
     if $pd == 1
         print "The dataset has no seasonality. Eventuall specified seasonality will be ignored."
-        bundle self.seasonal = null
+        bundle self.seasonal_info = null
     endif
 end function
 
@@ -60,12 +60,12 @@ function scalar stochastic_season_exists (const bundle self)
     return: type, description */
 
     scalar ret = 0
-    strings components = getkeys(self.seasonal)
+    strings components = getkeys(self.seasonal_info)
 
     loop i=1..nelem(components)
         string key = sprintf("component_%d", i)
 
-        if self.seasonal["@key"].stochastic == TRUE
+        if self.seasonal_info["@key"].stochastic == TRUE
             ret++
         endif
     endloop
@@ -236,15 +236,15 @@ end function
 function strings get_seasonal_parameter_labels (const bundle self)
     /* Construct parameter labels for seasonal components. */
 
-    strings components = getkeys(self.seasonal)
+    strings components = getkeys(self.seasonal_info)
     strings ret = array(nelem(components))
 
     loop i=1..nelem(components)
         string key = sprintf("component_%d", i)
 
         ret[i] = sprintf("Seasonal (%s, F=%.2f)",\
-                         self.seasonal["@key"].type,\
-                         self.seasonal["@key"].frequency)
+                         self.seasonal_info["@key"].type,\
+                         self.seasonal_info["@key"].frequency)
     endloop
 
     return ret
@@ -278,12 +278,12 @@ end function
 function void print_specification_seasonal (const bundle self)
     /* Print specification for seasonals. */
 
-    strings components = getkeys(self.seasonal)
+    strings components = getkeys(self.seasonal_info)
 
     loop i=1..nelem(components)
         string key = sprintf("component_%d", i)
 
-        string s = self.seasonal["@key"].stochastic == TRUE ? \
+        string s = self.seasonal_info["@key"].stochastic == TRUE ? \
                    "stochastic" : "deterministic"
 
         printf ", seasonal"
@@ -291,7 +291,7 @@ function void print_specification_seasonal (const bundle self)
             printf " (%d)", i
         endif
         printf ": %s (%s, F=%.2f)",\
-            s, self.seasonal["@key"].type, self.seasonal["@key"].frequency
+            s, self.seasonal_info["@key"].type, self.seasonal_info["@key"].frequency
     endloop
 end function
 

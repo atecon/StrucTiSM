@@ -18,7 +18,7 @@ function bundle STSM_setup (const series y "Dependent variable",
     endif
 
     check_seasonality(&self)
-    scalar self.n_seasonal_components = nelem(getkeys(self.seasonal))
+    scalar self.n_seasonal_components = nelem(getkeys(self.seasonal_info))
 
     string self.depvarname = !strlen(argname(y)) ? "Y" : argname(y)
     xlist -= const
@@ -137,7 +137,7 @@ function scalar STSM_estimate (bundle *self,
 #    *** HIER WEITERMACHEN
 
     # take care of the unobserved components
-    J = Xtract(self.type_slope, self.seasonal, self.pd)
+    J = Xtract(self.type_slope, self.seasonal_info, self.pd)
     k = add_states_to_model(&self, J)
     J = qformvech(J)
     dg = diag(unvech(seq(1,cols(J))'))

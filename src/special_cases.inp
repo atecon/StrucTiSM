@@ -40,12 +40,12 @@ function matrix special_case_seasonals (const bundle self, const matrix trend)
     return: type, description */
 
     matrix X
-    strings components = getkeys(self.seasonal)
+    strings components = getkeys(self.seasonal_info)
 
     loop i=1..nelem(components)
         string key = sprintf("component_%d", i)
 
-        frq = self.seasonal["@key"].frequency
+        frq = self.seasonal_info["@key"].frequency
 
         matrix seas = (trend % frq) .= seq(1, (frq-1))
         X ~= seas - (1 / frq)
@@ -61,7 +61,7 @@ function matrix special_case_seasonals_states (const bundle self,
     /* Compute states for each seasonal component for the special case.
     return: matrix, Each column holds one of the (ordered by frequency) seasonal component. */
 
-    strings components = getkeys(self.seasonal)
+    strings components = getkeys(self.seasonal_info)
     matrix ret = mshape(NA, self.T, nelem(components))
     scalar init = 1
 
@@ -69,10 +69,10 @@ function matrix special_case_seasonals_states (const bundle self,
         string key = sprintf("component_%d", i)
 
         if i == 1
-            scalar ende = self.seasonal["@key"].frequency - 1
+            scalar ende = self.seasonal_info["@key"].frequency - 1
         else
             init = 1 + ende
-            scalar ende = init + self.seasonal["@key"].frequency - 2
+            scalar ende = init + self.seasonal_info["@key"].frequency - 2
         endif
 
         ret[,i] = X[,init:ende] * coeff[init:ende]
@@ -119,17 +119,17 @@ function void special_case_seasonal_component (bundle *self,
                                                const matrix states)
     /* Add seasonal components as series to bundle. */
 
-    strings components = getkeys(self.seasonal)
+    strings components = getkeys(self.seasonal_info)
 
     loop i=1..nelem(components)
         string key = sprintf("component_%d", i)
-        scalar frq = ceil(self.seasonal["@key"].frequency)
+        scalar frq = ceil(self.seasonal_info["@key"].frequency)
         string vname = sprintf("%s_seas_%d", self.depvarname, frq)
 
         self.component_names += vname
         self.component_descriptions += \
             sprintf("Seasonal Freq = %g (deterministic)",\
-                     self.seasonal["@key"].frequency)
+                     self.seasonal_info["@key"].frequency)
 
         genseries(vname, states[,i])
         self[vname] = @vname
