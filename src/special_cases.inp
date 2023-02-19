@@ -14,7 +14,7 @@ function scalar get_special_case_id (const bundle self)
     	    ret = 1
 
     	elif stochastic_trend == FALSE && \
-            self.type_slope == "deterministic" && \
+            self.type_slope == "det" && \
             self.n_seasonal_components == 0
     	    # case 2: constant + trend + irregular
     	    ret = 2
@@ -25,7 +25,7 @@ function scalar get_special_case_id (const bundle self)
     	    ret = 3
 
         elif stochastic_trend == FALSE && \
-            self.type_slope == "deterministic" && stochastic_season == FALSE
+            self.type_slope == "det" && stochastic_season == FALSE
     	    # case 4: constant + trend + seasonal dummies + irregular
     	    ret = 4
     	endif

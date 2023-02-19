@@ -29,7 +29,7 @@ assert(nelem(model.seasonal_info) == 0)
 print "Specification 3"
 open bikesharing.gdt --quiet
 
-bundle model = _(error_in_obseq = TRUE, type_slope = "deterministic")
+bundle model = _(error_in_obseq = TRUE, type_slope = "det")
 bundle model = STSM_setup(cnt, model)
 scalar err = STSM_estimate(&model)
 list comps = STSM_components(model)

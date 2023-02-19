@@ -6,8 +6,8 @@ function bundle default_model_bundle (void)
     scalar self.err = FALSE
     scalar self.verbose = TRUE
     scalar self.error_in_obseq = TRUE          # formerly "epsilon"
-    string self.type_trend = "deterministic"   # {"stochastic" "deterministic"}
-    string self.type_slope = "none"  # {"none" "stochastic" "deterministic"}
+    string self.type_trend = "det"   # {"stochastic" "det"}
+    string self.type_slope = "none"  # {"none" "stochastic" "det"}
     scalar self.pd = $pd
 
     bundle self.seasonal_info = null
@@ -282,7 +282,7 @@ function void print_specification_seasonal (const bundle self)
     loop i=1..nelem(components)
         string key = sprintf("component_%d", i)
 
-        string s = self.seasonal_info[key].stochastic == TRUE ? \
+        string s = self.seasonal_info[key].stoch == TRUE ? \
                    "stochastic" : "deterministic"
 
         printf ", seasonal"
@@ -394,8 +394,8 @@ function scalar add_states_to_model (bundle *self, const matrix J)
         component_names += sername
         component_descriptions += "Slope"
         self[sername] = @sername
-    elif self.type_slope == "deterministic"
         # just skip the deterministic slope
+    elif self.type_slope == "det"
         ncomponents++
     endif
 

@@ -61,13 +61,13 @@ function matrix Qmat (const bundle self)
 
     if self.type_trend == "stoch"
         ret = diagcat(ret, 1)
-    elif self.type_trend == "deterministic"
+    elif self.type_trend == "det"
         ret = diagcat(ret, 0)
     endif
 
     if self.type_slope == "stoch"
         ret = diagcat(ret, 1)
-    elif self.type_slope == "deterministic"
+    elif self.type_slope == "det"
         ret = diagcat(ret, 0)
     else
         # nothing to do if no slope is requested
