@@ -45,7 +45,7 @@ function matrix special_case_seasonals (const bundle self, const matrix trend)
     loop i=1..nelem(components)
         string key = sprintf("component_%d", i)
 
-        frq = self.seasonal_info["@key"].frequency
+        frq = self.seasonal_info[key].frequency
 
         matrix seas = (trend % frq) .= seq(1, (frq-1))
         X ~= seas - (1 / frq)
@@ -69,10 +69,10 @@ function matrix special_case_seasonals_states (const bundle self,
         string key = sprintf("component_%d", i)
 
         if i == 1
-            scalar ende = self.seasonal_info["@key"].frequency - 1
+            scalar ende = self.seasonal_info[key].frequency - 1
         else
             init = 1 + ende
-            scalar ende = init + self.seasonal_info["@key"].frequency - 2
+            scalar ende = init + self.seasonal_info[key].frequency - 2
         endif
 
         ret[,i] = X[,init:ende] * coeff[init:ende]
@@ -123,13 +123,13 @@ function void special_case_seasonal_component (bundle *self,
 
     loop i=1..nelem(components)
         string key = sprintf("component_%d", i)
-        scalar frq = ceil(self.seasonal_info["@key"].frequency)
+        scalar frq = ceil(self.seasonal_info[key].frequency)
         string vname = sprintf("%s_seas_%d", self.depvarname, frq)
 
         self.component_names += vname
         self.component_descriptions += \
             sprintf("Seasonal Freq = %g (deterministic)",\
-                     self.seasonal_info["@key"].frequency)
+                     self.seasonal_info[key].frequency)
 
         genseries(vname, states[,i])
         self[vname] = @vname

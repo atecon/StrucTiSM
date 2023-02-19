@@ -13,7 +13,7 @@ function bundle default_model_bundle (void)
     bundle self.seasonal_info = null
     #bundle self.seasonal_info.component_1 = null
     #scalar self.seasonal_info.component_1.stochastic = FALSE
-    #string self.seasonal_info.component_1.type = "dummy"    # {"dummy", "trigonometric"}
+    #string self.seasonal_info.component_1.type = "dum"    # {"dum", "trig"}
     # scalar self.seasonal_info.component_1.frequency = $pd
 
     scalar self.nStates = NA
@@ -160,7 +160,7 @@ function scalar inject (const bundle self,
     /* This function injects the mle parameters into the Kalman bundle,
     given the characteristics of the model. */
 
-    scalar err = FALSE   # TODO: Just a dummy needed for mle block?
+    scalar err = FALSE   # TODO: Just a dum needed for mle block?
     scalar init = self.error_in_obseq == TRUE ? 2 : 1
 
     if self.error_in_obseq
@@ -337,11 +337,11 @@ function matrix Xtract (const bundle self)
         scalar pd_factor = self.seasonal_info[key].frequency
 
         if self.seasonal_info[key].stochastic == TRUE && \
-           self.seasonal_info[key].type == "trigonometric"
+           self.seasonal_info[key].type == "trig"
 
             ret = diagcat(ret, mshape({1,0}, (pd_factor - 1), 1))
 
-        elif self.seasonal_info[key].type == "dummy"
+        elif self.seasonal_info[key].type == "dum"
             ret = diagcat(ret, 1 | zeros((pd_factor - 2), 1))
         endif
     endloop
