@@ -1,7 +1,7 @@
 author = Riccardo "Jack" Lucchetti and Sven Schreiber
 email = r.lucchetti@univpm.it
-version = 0.7
-date = 2021-11-04
+version = 1.0
+date = 2022-09-26
 description = Harvey-style Structural Time Series Models
 tags = C22 C52
 min-version = 2020c
@@ -20,4 +20,5 @@ public = STSM_GUImeta STSM_GUIplot STSM_setup STSM_estimate \
        LLT BSM
 help = StrucTiSM.pdf
 sample-script = StrucTiSM_sample.inp
+depends = extra
 

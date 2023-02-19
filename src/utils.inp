@@ -1,17 +1,91 @@
-# Function index:
-# set_horizon
-# reparm
-# inject
-# maybe_scale_depvar
-# adjust
-# parlabels
-# specification
-# Xtract
-# add_states_to_model
-# qformvech
+function bundle default_model_bundle (void)
+    /* Compile the default bundle holding model parameters */
+
+    bundle self = null
+
+    scalar self.err = FALSE
+    scalar self.verbose = TRUE
+    scalar self.error_in_obseq = TRUE          # formerly "epsilon"
+    string self.type_trend = "det"   # {"stochastic" "det"}
+    string self.type_slope = "none"  # {"none" "stochastic" "det"}
+    scalar self.pd = $pd
+
+    bundle self.seasonal_info = null
+    #bundle self.seasonal_info.component_1 = null
+    #scalar self.seasonal_info.component_1.stoch = FALSE
+    #string self.seasonal_info.component_1.type = "dum"    # {"dum", "trig"}
+    # scalar self.seasonal_info.component_1.frequency = $pd
+
+    scalar self.nStates = NA
+    scalar self.nVar = NA       # number of variances to estimate
+    scalar self.y_scaling_factor = NA
+
+    return self
+end function
 
 
-####################
+function void check_seasonality (bundle *self)
+    /* Check if dataset has seasonality. If not, reset seasonal bundle. */
+
+    if $pd == 1
+        print "The dataset has no seasonality. Eventuall specified seasonality will be ignored."
+        bundle self.seasonal_info = null
+    endif
+end function
+
+
+function bundle get_sample_details (const series y, const list xlist[null])
+    /* Get sample start and end.
+    return: bundle, holding index of start and end date */
+
+    bundle self
+
+    list Z = y xlist
+    series okobs = zeromiss(ok(Z))
+    scalar self.sample_start_index = xmax(firstobs(okobs), $t1)
+    scalar self.sample_end_index = xmin(lastobs(okobs), $t2)
+
+
+    return self
+end function
+
+function string get_sample_string (const int start_index,
+                                   const int end_index)
+    return sprintf("%s - %s", obslabel(start_index), obslabel(end_index))
+end function
+
+
+function scalar stochastic_season_exists (const bundle self)
+    /* code description
+    return: type, description */
+
+    scalar ret = 0
+    strings components = getkeys(self.seasonal_info)
+
+    loop i=1..nelem(components)
+        string key = sprintf("component_%d", i)
+
+        if self.seasonal_info[key].stoch == TRUE
+            ret++
+        endif
+    endloop
+
+    return (ret > 0) ? TRUE : FALSE
+end function
+
+
+function void get_xlist_details (list xlist, bundle *self)
+    /* Add some details about xlist to bundle. */
+
+    scalar self.nexog = nelem(xlist)
+
+    if self.nexog
+        list self.xlist = xlist
+        string self.xnames = varname(xlist)
+        matrix self.mX = {xlist}
+    endif
+end function
+
 
 function scalar set_horizon(void)
     # some sensible defaults
@@ -31,22 +105,45 @@ function scalar set_horizon(void)
 end function
 
 
+function matrix get_initial_psi_parameters (const bundle self)
+    /* Initialize parameters to estimate. */
+
+    if self.mapping == 2    # logarithmic case
+        return zeros(self.nVar + self.error_in_obseq, 1)
+    endif
+    # TODO: WHY multiply by '4'?
+    scalar a = get_initial_stdveps_parameter(self.mapping)
+    return ones(self.nVar + self.error_in_obseq, 1) .* a
+end function
+
+
+function scalar get_initial_stdveps_parameter (const scalar mapping)
+    /* Initialize parameters to estimate. */
+
+    if mapping == 2    # logarithmic case
+        return 0
+    else
+        return 4
+    endif
+end function
+
 ###
 ### Variance estimation: from (-infty, infty) to (0, infty) and vice versa
 ###
 
-function matrix reparm( const matrix psi, int option[0:2:1],
-                       bool inverse[0])
+function matrix reparm (const matrix psi,
+                        int mapping[0:2:1],
+                        bool inverse[0])
+    /* This function returns _variances_ for given parameters.
+    Options are: 0 = abs, 1 = square, 2 = exp */
+
     set warnings off
-    # this function returns _variances_ given params
-    # option: 0 = abs 1 = square 2 = exp
+    matrix ret
 
-    matrix ret = {}
-
-    if option == 1
+    if mapping == 1
         # what goes into mle is std. devs
         ret = inverse ? sqrt(psi) : psi.^2
-    elif option == 2
+    elif mapping == 2
         # what goes into mle is log variances
         ret = inverse ? ln(psi) : exp(psi)
     else
@@ -54,280 +151,321 @@ function matrix reparm( const matrix psi, int option[0:2:1],
         ret = abs(psi)
     endif
 
-
     return ret
 end function
 
-function scalar inject(matrix theta, bundle *kmod, bool eps,
-                       scalar nVar, const matrix R, scalar mapping,
-                       scalar nexog)
 
-    # this function injects the mle parameters into the Kalman bundle,
-    # given the characteristics of the model; returns an error value
+function scalar inject (const bundle self,
+                        bundle *model)
+    /* This function injects the mle parameters into the Kalman bundle,
+    given the characteristics of the model. */
 
-    scalar err = 0
-    ini = 1
-    if eps
-        kmod.obsvar = reparm(theta[1], mapping)
-        ini++
+    scalar err = FALSE   # TODO: Just a dum needed for mle block?
+    scalar init = self.error_in_obseq == TRUE ? 2 : 1
+
+    if self.error_in_obseq
+        # [1]: irregular component is always positioned first
+        model.obsvar = reparm(self.psi[1], self.mapping)
     endif
-    fin = ini + nVar - 1
 
-    kmod.statevar[diag] = R * reparm(theta[ini:fin], mapping)
-    if nexog > 0
-        ini = fin + 1
-        fin = fin + nexog
-        kmod.obsxmat = theta[ini:fin]
+    model.statevar[diag] = self.Qmat * reparm(self.psi[init:], self.mapping)
+
+    if self.nexog > 0
+        model.obsxmat = self.psi_exogenous
     endif
+
     return err
 end function
 
-function series maybe_scale_depvar( series y, scalar *scale, bool verbosely[0])
-    # for now
-    scale = sd(y) / 100
-    ret = y / scale
-    if verbosely
-        printf "scale for dependent variable = %g\n", scale
+function series scale_series (const series y,
+                              bundle *self)
+    # TODO: For now
+
+    self.y_scaling_factor = sd(y) / 100
+    series ret = y / self.y_scaling_factor
+
+    if self.verbose
+        printf "Info: Scale for dependent variable = %g\n",\
+            self.y_scaling_factor
     endif
+
     return ret
 end function
 
-function matrices adjust(matrix coeff, matrix vcv, scalar scale,
-                         int mapping, scalar nexog)
-    # this function re-maps the parameters used in "mle" into standard
-    # deviations, in the orginal unit of measurement; ret[1] contains the
-    # parameters, ret[2] their vcv (computed via the delta method)
 
-    matrices ret = array(2)
-    k = rows(coeff) - nexog
-    vc = coeff[1:k]
-    se_unscaled = sqrt(reparm(vc, mapping))
-    ret[1] = se_unscaled * scale
+function bundle remap_coefficients (const matrix coeff,
+                                    const matrix vcv,
+                                    const bundle self)
+    /* Tis function re-maps the parameters used in "mle" into standard
+    deviations, in the orginal unit of measurement.
+    ret[1] contains the parameters, ret[2] their vcv
+    (computed via the delta method). */
+
+    bundle B
+
+    scalar k = rows(coeff) - self.nexog
+    matrix vc = coeff[1:k]
+    matrix se_unscaled = sqrt(reparm(vc, self.mapping))
+    matrix se_scaled = se_unscaled * self.y_scaling_factor
 
     # the Jacobian
-    if mapping == 0
-        matrix J = 0.5 * scale ./ se_unscaled
-    elif mapping == 1
-        matrix J = mshape(scale, k, 1)
-    elif mapping == 2
-        matrix J = 0.5 .* ret[1]
+    if self.mapping == 0
+        matrix J = 0.5 * self.y_scaling_factor ./ se_unscaled
+    elif self.mapping == 1
+        matrix J = mshape(self.y_scaling_factor, k, 1)
+    elif self.mapping == 2
+        matrix J = 0.5 .* se_scaled
     endif
 
-    ret[2] = vcv[1:k,1:k] .* (J*J')
+    matrix vcv_scaled = vcv[1:k,1:k] .* (J*J')
 
-    if nexog
-        betas = coeff[k+1:k+nexog] * scale
-        ret[1] |= betas
-        ret[2] = diagcat(ret[2], scale^2 * vcv[k+1:k+nexog,k+1:k+nexog])
+    if self.nexog
+        self.sample_start_index = k + 1
+        fini = k+nexog
+
+        se_scaled |= coeff[self.sample_start_index:fini] * self.y_scaling_factor
+        vcv_scaled = diagcat(vcv_scaled,\
+                             self.y_scaling_factor^2 * vcv[self.sample_start_index:fini,self.sample_start_index:fini])
     endif
+
+    return _(coeff = se_scaled, vcv = vcv_scaled)
+end function
+
+
+function strings get_seasonal_parameter_labels (const bundle self)
+    /* Construct parameter labels for seasonal components. */
+
+    strings components = getkeys(self.seasonal_info)
+    strings ret = array(nelem(components))
+
+    loop i=1..nelem(components)
+        string key = sprintf("component_%d", i)
+
+        ret[i] = sprintf("Seasonal (%s, F=%.2f)",\
+                         self.seasonal_info[key].type,\
+                         self.seasonal_info[key].frequency)
+    endloop
 
     return ret
 end function
 
-function strings parlabels(bool epsilon, int trend, int slope,
-                           int seasonal, bool has_exog)
+
+function strings get_parameter_labels (const bundle self)
+    /* Create array of parameter labels. */
+
     strings ret = array(0)
-    if epsilon
+
+    if self.error_in_obseq
         ret += "Irregular"
     endif
 
-    if trend == 1
-        ret += "Trend"
+    ret += sprintf("Trend (%s)", self.type_trend)
+
+    if self.type_slope != "none"
+        ret += sprintf("Slope (%s)", self.type_slope)
     endif
 
-    if slope == 1
-        ret += "Slope"
-    endif
+    ret += get_seasonal_parameter_labels(self)
 
-    if seasonal == 1
-        ret += "Seasonal (trig)"
-    elif seasonal == 2
-        ret += "Seasonal (dums)"
+    if self.nexog > 0
+        ret += self.xnames
     endif
-
-    # if has_exog
-    #     ret += "Exogenous"
-    # endif
 
     return ret
 end function
 
-function string specification(bool epsilon, int trend, int slope,
-                              int seasonal)
+function void print_specification_seasonal (const bundle self)
+    /* Print specification for seasonals. */
 
-    string ret = ""
+    strings components = getkeys(self.seasonal_info)
 
-    if trend == 1
-        ret = "Stochastic trend"
-    elif trend == 2
-        ret = "Deterministic trend"
-    endif
+    loop i=1..nelem(components)
+        string key = sprintf("component_%d", i)
 
-    if slope == 0
-        ret = ret ~ ", no slope"
-    elif slope == 1
-        ret = ret ~ ", stochastic slope"
-    elif slope == 2
-        ret = ret ~ ", deterministic slope"
-    endif
+        string s = self.seasonal_info[key].stoch == TRUE ? \
+                   "stochastic" : "deterministic"
 
-    if seasonal == 1
-        ret = ret ~ ", trigonometric seasonals"
-    elif seasonal == 2
-        ret = ret ~ ", dummy seasonals (stoch.)"
-    elif seasonal == 3
-        ret = ret ~ ", dummy seasonals (det.)"
-    endif
-
-    if epsilon
-        if strlen(ret) > 50
-            ret = sprintf("%s,\nirregular component", ret)
-        else
-            ret = ret ~ ", irregular component"
+        printf ", seasonal"
+        if nelem(components) > 1
+            printf " (%d)", i
         endif
-    endif
-
-    return ret
+        printf ": %s (%s, F=%.2f)",\
+            s, self.seasonal_info[key].type, self.seasonal_info[key].frequency
+    endloop
 end function
 
-function matrix Xtract(int slope, int seasonal, scalar pd)
 
-    # this function creates an n x k matrix, which extracts
-    # the components to export from the state vector
+function void print_specification (const bundle self)
+    /* Print specification. */
 
-    # the level is always there, either deterministic or stochastic
+    printf "\n\nSpecification:\n"
+    printf "================\n"
+
+    printf "Trend: %s", self.type_trend
+    printf ", slope: %s", self.type_slope
+
+    print_specification_seasonal(self)
+
+    if self.error_in_obseq
+            printf "\n, irregular component"
+    endif
+    printf "\n\n"
+end function
+
+
+function matrix Xtract (const bundle self)
+    /* This function creates an n x k matrix, which extracts the components
+    to export from the state vector the level is always there, either
+    deterministic or stochastic. */
+
     matrix ret = {1}
 
-    if slope > 0
+    if self.type_slope != "none"
         ret = diagcat(ret, 1)
     endif
 
-    if seasonal == 1
-        ret = diagcat(ret, mshape({1,0}, pd-1, 1))
-    elif seasonal == 2 || seasonal == 3
-        ret = diagcat(ret, 1 | zeros(pd-2, 1))
+    strings components = getkeys(self.seasonal_info)
+
+    if nelem(components) > 1
+        print "ERROR: TODO: Currently this only supports a single seasonal component"
+        print "We need to stack further seasonal components here"
+        stop
     endif
+
+    loop i=1..nelem(components)
+        string key = sprintf("component_%d", i)
+        scalar pd_factor = self.seasonal_info[key].frequency
+
+        if self.seasonal_info[key].stoch == TRUE && \
+           self.seasonal_info[key].type == "trig"
+
+            ret = diagcat(ret, mshape({1,0}, (pd_factor - 1), 1))
+
+        elif self.seasonal_info[key].type == "dum"
+            ret = diagcat(ret, 1 | zeros((pd_factor - 2), 1))
+        endif
+    endloop
 
     return ret
 end function
 
-function scalar add_states_to_model(bundle *model, const matrix J)
 
-    # does model contain estimates at all?
-    if !inbundle(model, "St")
-        printf "Error!\n"
+# TODO: This function does way too many things at the moment
+function scalar add_states_to_model (bundle *self, const matrix J)
+    /* Return the number of components. */
+
+    if !inbundle(self, "state")
+        printf "Error: States not found on model bundle.\n"
         return 0
     endif
 
-    strings compnames = null
-    strings compdescs = null
-    scalar k = 1
-    scalar has_eps = model.epsilon
-    scalar ini = model.ini
-    scalar fin = model.fin
-    smpl ini fin
+    strings component_names = null
+    strings component_descriptions = null
+    scalar ncomponents = 1
+
+    smpl self.sample_start_index self.sample_end_index
 
     # initialise the "residuals"
-    if has_eps
-        series eps = model.depvar * model.scale
+    if self.error_in_obseq
+        series eps = self.depvar * self.y_scaling_factor
     endif
 
     # "name" holds the outer name of the dependent variable
-    name = model.depvarname
-    nStates = model.nStates
-    pd = model.pd
-    matrix St = model.St * J
+    string name = self.depvarname
+    scalar nStates = self.nStates
+    matrix stateJ = self.state * J
 
     # do the level ---------------------------------------------
     string sername = name ~ "_level"
-    genseries(sername, St[,1])
-    compnames += sername
-    compdescs += "Trend level"
-    model[sername] = @sername
+    genseries(sername, stateJ[,1])
+    component_names += sername
+    component_descriptions += "Trend level"
+    self[sername] = @sername
 
-    if has_eps
+    if self.error_in_obseq
         series eps -= @sername
     endif
 
     # do the slope, if present ---------------------------------
-    if model.slope == 1
-        k++
+    if self.type_slope == "stoch"
+        ncomponents++
         sername = name ~ "_slope"
-        genseries(sername, St[,k])
-        compnames += sername
-        compdescs += "Slope"
-        model[sername] = @sername
-    elif model.slope == 2
+        genseries(sername, stateJ[,ncomponents])
+        component_names += sername
+        component_descriptions += "Slope"
+        self[sername] = @sername
         # just skip the deterministic slope
-        k++
+    elif self.type_slope == "det"
+        ncomponents++
     endif
 
-    # do the seasonal, if present ------------------------------
-    if model.seasonal >= 1
-        k++
-        # printf "(seasonal) k = %d\n", k
-        sername = name ~ "_seas"
-        genseries(sername, St[,k])
-        compnames += sername
-        if model.seasonal == 1
-            compdescs += "Seasonal (with trigon. terms)"
-        elif model.seasonal > 1
-            compdescs += "Seasonal (with dummies)"
-        endif
-        model[sername] = @sername
-        if has_eps
-            series eps -= @sername
-        endif
+    # do the seasonal(s), if present ------------------------------
+    if nelem(self.seasonal_info) > 0
+        strings components = getkeys(self.seasonal_info)
+
+        loop i=1..nelem(components)
+            ncomponents++
+            string key = sprintf("component_%d", i)
+
+            string sername = sprintf("%s_seas%d",
+                                     name,
+                                     self.seasonal_info[key].frequency)
+
+            genseries(sername, stateJ[,ncomponents])
+            component_names += sername
+            string desc = self.seasonal_info[key].stoch ? \
+                          ", stoch" : ""
+            component_descriptions += sprintf("Seasonal (%s%s)",
+                                 self.seasonal_info[key].type,
+                                 desc)
+            self[sername] = @sername
+            if self.error_in_obseq
+                series eps -= @sername
+            endif
+        endloop
     endif
 
     # do the exogenous component, if present ---------------------
-    if model.nexog >= 1
-        k++
-        nVar = model.nVar
+    if self.nexog >= 1
+        ncomponents++
+        nVar = self.nVar
         sername = name ~ "_exo"
 
-        beta = model.coeff[has_eps + model.nVar + 1:]
-        genseries(sername, model.mX * beta)
-        compnames += sername
-        compdescs += "Exogenous"
-        model[sername] = @sername
-        if has_eps
+        beta = self.coeff[self.error_in_obseq + self.nVar + 1:]
+        genseries(sername, self.mX * beta)
+        component_names += sername
+        component_descriptions += "Exogenous"
+        self[sername] = @sername
+        if self.error_in_obseq
             series eps -= @sername
         endif
     endif
 
     # finalise the irregular component, if present --------------
-    if has_eps
-        k++
+    if self.error_in_obseq
+        ncomponents++
         sername = name ~ "_irreg"
         genseries(sername, eps)
-        compnames += sername
-        compdescs += "Irregular"
-        model[sername] = @sername
+        component_names += sername
+        component_descriptions += "Irregular"
+        self[sername] = @sername
     endif
 
     # Add the names of the newly created series to the bundle
-    strings model.compnames = compnames
-    strings model.compdescs = compdescs
+    strings self.component_names = component_names
+    strings self.component_descriptions = component_descriptions
 
-    return k
+    return ncomponents
 end function
 
-function matrix qformvech(matrix X)
-    # vech(X'AX) = P (X ** X)' Q vech(A) = G vech(A)
-    # this function returns G
 
-    n = rows(X)
-    m = round(n * (n+1) / 2)
-    s = seq(1,m)
-    matrix P = vec(upper(unvech(s'))) .= s
+function matrix ols_exogenous (const bundle self)
+    /* Estimate effect of exogenous on endogenous.
+    return: matrix, vector of point estimates. */
 
-    n = cols(X)
-    m = round(n * (n+1) / 2)
-    s = seq(1,m)
-    matrix Q = vec(upper(unvech(s'))) .= s
-    matrix Q = Q || vec(lower(unvech(s'))) .= s
+    matrix y = diff(self.depvar)
+    matrix X = diff(self.mX)
+    matrix coeff = mols(y, X)   # TODO: Is scaling needed? ".* scale"
 
-    matrix ret = P'(X ** X) * Q
-    return ret
+    return coeff
 end function

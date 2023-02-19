@@ -1,133 +1,239 @@
-function scalar check_for_special_cases(int trend, int slope, int seas)
-    ret = 0
-    # check for a few special cases that need no
-    # numerical optimisation
+function scalar get_special_case_id (const bundle self)
+    /* Check for a few special cases that need no numerical optimisation */
 
-    st_trend = (trend == 1)
-    st_slope = (slope == 1)
-    st_seas = (seas == 1) || (seas == 2)
+    scalar ret = 0
+    stochastic_trend = (self.type_trend == "stoch")
+    stochastic_slope = (self.type_slope == "stoch")
+    stochastic_season = stochastic_season_exists(self)
 
-    if !(st_trend || st_slope || st_trend) 
-	if trend==2 && slope==0 && seas == 0
-	    # case 1: just a constant + irregular
-	    ret = 1
-	elif trend==2 && slope==2 && seas == 0
-	    # case 2: constant + trend + irregular
-	    ret = 2
-	elif trend==2 && slope==0 && seas == 3
-	    # case 3: constant + seasonal dummies + irregular
-	    ret = 3
-	elif trend==2 && slope==2 && seas == 3
-	    # case 4: constant + trend + seasonal dummies + irregular
-	    ret = 4
-	endif
+    # TODO: I think the if-conditions may be simplified
+    if !(stochastic_trend || stochastic_slope || stochastic_trend)
+    	if stochastic_trend == FALSE && \
+            self.type_slope == "none" && self.n_seasonal_components == 0
+    	    # case 1: just a constant + irregular
+    	    ret = 1
+
+    	elif stochastic_trend == FALSE && \
+            self.type_slope == "det" && \
+            self.n_seasonal_components == 0
+    	    # case 2: constant + trend + irregular
+    	    ret = 2
+
+        elif stochastic_trend == FALSE && \
+            self.type_slope == "none" && stochastic_season == FALSE
+    	    # case 3: constant + seasonal dummies + irregular
+    	    ret = 3
+
+        elif stochastic_trend == FALSE && \
+            self.type_slope == "det" && stochastic_season == FALSE
+    	    # case 4: constant + trend + seasonal dummies + irregular
+    	    ret = 4
+    	endif
     endif
-    
+
     return ret
 end function
 
-function matrix handle_special_case(int case, const matrix y, scalar pd)
-    T = rows(y)
-    X = ones(T, 1)
-    Tr = seq(1,T)'
-    matrix e = {}
-    if (case == 2) || (case == 4)
-	X ~= Tr
-    endif
-    if (case == 3) || (case == 4)
-	seas = (Tr % pd) .= seq(1,pd-1)
-	X ~= seas - (1/pd)
-    endif
 
-    Pi = mols(y, X, &e)
+function matrix special_case_seasonals (const bundle self, const matrix trend)
+    /* Construct seasonals for estimating special cases.
+    return: type, description */
 
-    if case == 1
-	state = X*Pi
-    elif case == 2
-	state = X[,1:2]*Pi[1:2] 
-	state = state ~ mshape(Pi[2], T, 1)
-    elif case == 3
-	state = mshape(Pi[1], T, 1) ~ X[,2:] * Pi[2:]
-    elif case == 4
-	state = X[,1:2]*Pi[1:2] 
-	state = state ~ mshape(Pi[2], T, 1)
-	state = state ~ X[,3:] * Pi[3:]
-    endif
+    matrix X
+    strings components = getkeys(self.seasonal_info)
 
-    return e ~ state
+    loop i=1..nelem(components)
+        string key = sprintf("component_%d", i)
+
+        frq = self.seasonal_info[key].frequency
+
+        matrix seas = (trend % frq) .= seq(1, (frq-1))
+        X ~= seas - (1 / frq)
+    endloop
+
+    return X
 end function
 
-function scalar add_states_special(matrix St, bundle *model)
 
-    case = model.special_case
-    strings compnames = null
-    strings compdescs = null
-    scalar ini = model.ini
-    scalar fin = model.fin
-    smpl ini fin
+function matrix special_case_seasonals_states (const bundle self,
+                                               const matrix X,
+                                               const matrix coeff)
+    /* Compute states for each seasonal component for the special case.
+    return: matrix, Each column holds one of the (ordered by frequency) seasonal component. */
 
-    # "name" holds the outer name of the dependent variable
-    name = model.depvarname
-    nStates = cols(St) - 1
-    pd = model.pd
+    strings components = getkeys(self.seasonal_info)
+    matrix ret = mshape(NA, self.T, nelem(components))
+    scalar init = 1
 
-    # do the irregular component --------------------------
-    sername = name ~ "_irreg"
-    genseries(sername, St[,1])
-    compnames += sername
-    compdescs += "Irregular"
-    model[sername] = @sername
-      
-    # do the level ---------------------------------------------
-    string sername = name ~ "_level"
-    genseries(sername, St[,2])
-    compnames += sername
-    compdescs += "Trend level"
-    model[sername] = @sername
-    
-    scalar k = 2
-    # do the slope, if present ---------------------------------
-    if (case==2) || (case == 4)
-	k++
-        sername = name ~ "_slope" 
-        genseries(sername, St[,k])
-        compnames += sername
-        compdescs += "Slope"
-	model[sername] = @sername
+    loop i=1..nelem(components)
+        string key = sprintf("component_%d", i)
+
+        if i == 1
+            scalar ende = self.seasonal_info[key].frequency - 1
+        else
+            init = 1 + ende
+            scalar ende = init + self.seasonal_info[key].frequency - 2
+        endif
+
+        ret[,i] = X[,init:ende] * coeff[init:ende]
+    endloop
+
+    return ret
+end function
+
+function matrix special_case_state (const bundle self,
+                                    const matrix X,
+                                    const matrix coeff)
+    /* Compute state for special cases.
+    return: matrix, Holds the estimated (un-scaled) components such as level etc. */
+
+    matrix state
+
+    if self.special_case_id == 1
+        # no seasonal component(s)
+        state = X * coeff
+    elif self.special_case_id == 2
+        # no seasonal component(s)
+        state = X[,1:2] * coeff[1:2]
+        state ~= mshape(coeff[2], self.T, 1)
+
+    elif self.special_case_id == 3
+        state = mshape(coeff[1], self.T, 1)
+        scalar init_column_seasonal = 2
+    elif self.special_case_id == 4
+        state = X[,1:2] * coeff[1:2]
+        state ~= mshape(coeff[2], self.T, 1)
+        scalar init_column_seasonal = 3
+    endif
+
+    if self.special_case_id == 3 || self.special_case_id == 4
+        # Add seasonal components
+        state ~= special_case_seasonals_states(self, X[, init_column_seasonal:],
+                                               coeff[init_column_seasonal:])
+    endif
+
+    return state
+end function
+
+function void special_case_seasonal_component (bundle *self,
+                                               const matrix states)
+    /* Add seasonal components as series to bundle. */
+
+    strings components = getkeys(self.seasonal_info)
+
+    loop i=1..nelem(components)
+        string key = sprintf("component_%d", i)
+        scalar frq = ceil(self.seasonal_info[key].frequency)
+        string vname = sprintf("%s_seas_%d", self.depvarname, frq)
+
+        self.component_names += vname
+        self.component_descriptions += \
+            sprintf("Seasonal Freq = %g (deterministic)",\
+                     self.seasonal_info[key].frequency)
+
+        genseries(vname, states[,i])
+        self[vname] = @vname
+    endloop
+end function
+
+function matrix handle_special_case (const bundle self, matrix *coeff)
+    /* Return residuals and state vectors. */
+
+    matrix X = ones(self.T, 1)
+    matrix trend = seq(1, self.T)'
+    matrix uhat = {}
+
+    if (self.special_case_id == 2) || (self.special_case_id == 4)
+	   X ~= trend
+    endif
+    if (self.special_case_id == 3) || (self.special_case_id == 4)
+        X ~= special_case_seasonals(self, trend)
+    endif
+
+    matrix coeff = mols(self.depvar, X, &uhat)
+    matrix state = special_case_state(self, X, coeff)
+
+    return uhat ~ state
+end function
+
+function scalar add_states_special (matrix states, bundle *self)
+    /* */
+
+    strings self.component_names = null
+    strings self.component_descriptions = null
+    scalar counter = 2
+    scalar self.nStates = cols(states) - 1
+
+    # irregular component
+    string vname = self.depvarname ~ "_irreg"
+    genseries(vname, states[,1])
+    self.component_names += vname
+    self.component_descriptions += "Irregular"
+    self[vname] = @vname  # store series
+
+    # level component
+    string vname = self.depvarname ~ "_level"
+    genseries(vname, states[,2])
+    self.component_names += vname
+    self.component_descriptions += "Trend level"
+    self[vname] = @vname
+
+
+    # slope component if present
+    if self.type_slope != "none"
+        # if (self.special_case_id == 2) || (self.special_case_id  == 4)
+	   counter++
+       vname = self.depvarname ~ "_slope"
+       genseries(vname, states[,counter])
+       self.component_names += vname
+       self.component_descriptions += "Slope"
+	   self[vname] = @vname
     endif
  
-    # do the seasonal, if present ------------------------------
-    if (case==3) || (case == 4)
-	k++
-	# printf "(seasonal) k = %d\n", k
-        sername = name ~ "_seas"
-        genseries(sername, St[,k])
-        compnames += sername 
-        compdescs += "Seasonal (deterministic)"
-	model[sername] = @sername
+    # seasonal component(s), if present
+    if self.n_seasonal_components
+        # if (self.special_case_id == 3) || (self.special_case_id  == 4)
+       scalar ini = counter + 1
+       scalar ende = ini + self.n_seasonal_components - 1
+	   special_case_seasonal_component(&self, states[, ini:ende])
+       counter += self.n_seasonal_components
     endif
 
-    # do the exogenous component, if present ---------------------
-    if 0 # not for now
-	k++
-	nVar = model.nVar
-        sername = name ~ "_exo"
+    # exogenous component, if present
+    # TODO: Add later
+    if 0
+	   counter++
+	   nVar = self.nVar
+       vname = name ~ "_exo"
 	
-	beta = model.coeff[has_eps + model.nVar + 1:]
-        genseries(sername, model.mX * beta)
-        compnames += sername 
-	compdescs += "Exogenous"
-	model[sername] = @sername
+	   beta = self.coeff[has_eps + self.nVar + 1:]
+       genseries(vname, self.mX * beta)
+       self.component_names += vname
+	   self.component_descriptions += "Exogenous"
+        model[vname] = @vname
         if has_eps
-            series eps -= @sername
+            series eps -= @vname
         endif
     endif
     
-    # Add the names of the newly created series to the bundle
-    strings model.compnames = compnames
-    strings model.compdescs = compdescs
+    self.stSE = mshape(NA, self.T, counter)
 
-    model.stSE = mshape(NA,fin-ini+1, k)
-    return k
+    return counter
 end function
 
+
+function void estimate_special_case (bundle *self)
+    /* Call functions for estimating special case specifications which do not require numerical optimisation. */
+
+    matrix coeff = {}
+    # unscaled components
+    matrix components = handle_special_case(self, &coeff)
+    matrix components *= self.y_scaling_factor
+    self.coeff = coeff
+
+    add_states_special(components, &self)
+
+    if self.verbose
+        STSM_printout(&self)
+    endif
+end function
