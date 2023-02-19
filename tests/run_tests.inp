@@ -43,7 +43,7 @@ open bikesharing.gdt --quiet
 
 bundle model = _(error_in_obseq = TRUE)
 bundle model.seasonal_info = null
-model.seasonal_info.component_1 = _(stochastic = FALSE,\
+model.seasonal_info.component_1 = _(stoch = FALSE,\
                                type = "dum",\
                                frequency = 7)
 bundle model = STSM_setup(cnt, model)
@@ -58,7 +58,7 @@ open bikesharing.gdt --quiet
 
 bundle model = _(error_in_obseq = TRUE)
 bundle model.seasonal_info = null
-model.seasonal_info.component_1 = _(stochastic = FALSE,\
+model.seasonal_info.component_1 = _(stoch = FALSE,\
                                type = "trig",\
                                frequency = 7)
 bundle model = STSM_setup(cnt, model)
@@ -75,10 +75,10 @@ open bikesharing.gdt --quiet
 
 bundle model = _(error_in_obseq = FALSE)
 bundle model.seasonal_info = null
-model.seasonal_info.component_1 = _(stochastic = TRUE,\
+model.seasonal_info.component_1 = _(stoch = TRUE,\
                                type = "trig",\
                                frequency = 7)
-model.seasonal_info.component_2 = _(stochastic = FALSE,\
+model.seasonal_info.component_2 = _(stoch = FALSE,\
                                type = "dum",\
                                frequency = 365)
 catch bundle model = STSM_setup(cnt, model)
@@ -94,10 +94,10 @@ print "Specification 7: stochastic slope"
 open bikesharing.gdt --quiet
 
 bundle model = _(error_in_obseq = TRUE,
-                 type_slope = "stochastic",
-                 pe_trend = "stochastic")
+                 type_slope = "stoch",
+                 pe_trend = "stoch")
 bundle model.seasonal_info = null
-model.seasonal_info.component_1 = _(stochastic = TRUE,\
+model.seasonal_info.component_1 = _(stoch = TRUE,\
                                type = "dum",\
                                frequency = 7)
 bundle model = STSM_setup(cnt, model)
@@ -111,9 +111,9 @@ print "Specification 8: stochastic trend"
 open bikesharing.gdt --quiet
 
 bundle model = _(error_in_obseq = TRUE,
-                 type_trend = "stochastic")
+                 type_trend = "stoch")
 /*bundle model.seasonal_info = null
-model.seasonal_info.component_1 = _(stochastic = TRUE,\
+model.seasonal_info.component_1 = _(stoch = TRUE,\
                                type = "dum",\
                                frequency = 7)*/
 bundle model = STSM_setup(cnt, model)
@@ -132,10 +132,10 @@ open bikesharing.gdt --quiet
 
 bundle model = _(error_in_obseq = FALSE)
 bundle model.seasonal_info = null
-model.seasonal_info.component_1 = _(stochastic = TRUE,\
+model.seasonal_info.component_1 = _(stoch = TRUE,\
                                type = "trig",\
                                frequency = 7)
-model.seasonal_info.component_2 = _(stochastic = FALSE,\
+model.seasonal_info.component_2 = _(stoch = FALSE,\
                                type = "dum",\
                                frequency = 365)
 bundle model = STSM_setup(cnt, model)

@@ -12,7 +12,7 @@ function bundle default_model_bundle (void)
 
     bundle self.seasonal_info = null
     #bundle self.seasonal_info.component_1 = null
-    #scalar self.seasonal_info.component_1.stochastic = FALSE
+    #scalar self.seasonal_info.component_1.stoch = FALSE
     #string self.seasonal_info.component_1.type = "dum"    # {"dum", "trig"}
     # scalar self.seasonal_info.component_1.frequency = $pd
 
@@ -65,7 +65,7 @@ function scalar stochastic_season_exists (const bundle self)
     loop i=1..nelem(components)
         string key = sprintf("component_%d", i)
 
-        if self.seasonal_info[key].stochastic == TRUE
+        if self.seasonal_info[key].stoch == TRUE
             ret++
         endif
     endloop
@@ -336,7 +336,7 @@ function matrix Xtract (const bundle self)
         string key = sprintf("component_%d", i)
         scalar pd_factor = self.seasonal_info[key].frequency
 
-        if self.seasonal_info[key].stochastic == TRUE && \
+        if self.seasonal_info[key].stoch == TRUE && \
            self.seasonal_info[key].type == "trig"
 
             ret = diagcat(ret, mshape({1,0}, (pd_factor - 1), 1))
@@ -387,7 +387,7 @@ function scalar add_states_to_model (bundle *self, const matrix J)
     endif
 
     # do the slope, if present ---------------------------------
-    if self.type_slope == "stochastic"
+    if self.type_slope == "stoch"
         ncomponents++
         sername = name ~ "_slope"
         genseries(sername, stateJ[,ncomponents])
@@ -413,8 +413,8 @@ function scalar add_states_to_model (bundle *self, const matrix J)
 
             genseries(sername, stateJ[,ncomponents])
             component_names += sername
-            string desc = self.seasonal_info[key].stochastic ? \
-                          ", stochastic" : ""
+            string desc = self.seasonal_info[key].stoch ? \
+                          ", stoch" : ""
             component_descriptions += sprintf("Seasonal (%s%s)",
                                  self.seasonal_info[key].type,
                                  desc)

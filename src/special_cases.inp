@@ -2,8 +2,8 @@ function scalar get_special_case_id (const bundle self)
     /* Check for a few special cases that need no numerical optimisation */
 
     scalar ret = 0
-    stochastic_trend = (self.type_trend == "stochastic")
-    stochastic_slope = (self.type_slope == "stochastic")
+    stochastic_trend = (self.type_trend == "stoch")
+    stochastic_slope = (self.type_slope == "stoch")
     stochastic_season = stochastic_season_exists(self)
 
     # TODO: I think the if-conditions may be simplified

@@ -20,23 +20,23 @@ function matrix Qseasonals (const bundle self)
     loop i=1..nelem(components)
         string key = sprintf("component_%d", i)
 
-        scalar k = self.seasonal_info["@key"].frequency - 1
+        scalar k = self.seasonal_info[key].frequency - 1
 
-        if self.seasonal_info["@key"].type == "trigonometric" && \
-            self.seasonal_info["@key"].stochastic == TRUE
+        if self.seasonal_info[key].type == "trig" && \
+            self.seasonal_info[key].stoch == TRUE
             matrix seas = diagcat(ret, mshape({1,0}, k, 1))
 
-        elif self.seasonal_info["@key"].type == "trigonometric" && \
-            self.seasonal_info["@key"].stochastic == FALSE
+        elif self.seasonal_info[key].type == "trig" && \
+            self.seasonal_info[key].stoch == FALSE
             # TODO: Can we implement this?
             errorif(TRUE, "Non-stochastic trigonometric seasonality not supported.")
 
-        elif self.seasonal_info["@key"].type == "dummy" && \
-            self.seasonal_info["@key"].stochastic == TRUE
+        elif self.seasonal_info[key].type == "dum" && \
+            self.seasonal_info[key].stoch == TRUE
             matrix seas = diagcat(ret, 1 | zeros(k-1, 1))
 
-        elif self.seasonal_info["@key"].type == "dummy" && \
-            self.seasonal_info["@key"].stochastic == FALSE
+        elif self.seasonal_info[key].type == "dum" && \
+            self.seasonal_info[key].stoch == FALSE
             matrix seas = diagcat(ret, zeros(k, 1))
         endif
 
@@ -59,13 +59,13 @@ function matrix Qmat (const bundle self)
 
     matrix ret
 
-    if self.type_trend == "stochastic"
+    if self.type_trend == "stoch"
         ret = diagcat(ret, 1)
     elif self.type_trend == "deterministic"
         ret = diagcat(ret, 0)
     endif
 
-    if self.type_slope == "stochastic"
+    if self.type_slope == "stoch"
         ret = diagcat(ret, 1)
     elif self.type_slope == "deterministic"
         ret = diagcat(ret, 0)
@@ -124,11 +124,11 @@ function matrix Tseasonals (const bundle self)
     loop i=1..nelem(components)
         string key = sprintf("component_%d", i)
 
-        if self.seasonal_info["@key"].type == "dummy"
-            matrix seas = dummy_seasonality(self.seasonal_info["@key"].frequency)
-        elif self.seasonal_info["@key"].type == "trigonometric"
+        if self.seasonal_info[key].type == "dum"
+            matrix seas = dummy_seasonality(self.seasonal_info[key].frequency)
+        elif self.seasonal_info[key].type == "trig"
             matrix seas =  \
-                trigonometric_seasonality(self.seasonal_info["@key"].frequency)
+                trigonometric_seasonality(self.seasonal_info[key].frequency)
         endif
 
         if nelem(components) == 1
@@ -202,9 +202,9 @@ function matrix Zseasonals (const bundle self)
     loop i=1..nelem(components)
         string key = sprintf("component_%d", i)
 
-        scalar pd = self.seasonal_info["@key"].frequency
+        scalar pd = self.seasonal_info[key].frequency
 
-        if self.seasonal_info["@key"].type == "dummy"
+        if self.seasonal_info[key].type == "dum"
             k = pd - 2
             matrix seas = 1 | zeros(k, 1)
         else
