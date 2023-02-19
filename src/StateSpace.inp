@@ -59,9 +59,9 @@ function matrix Qmat (const bundle self)
 
     matrix ret
 
-    if self.type_trend == "stoch"
+    if self.trend_type == "stoch"
         ret = diagcat(ret, 1)
-    elif self.type_trend == "det"
+    elif self.trend_type == "det"
         ret = diagcat(ret, 0)
     endif
 

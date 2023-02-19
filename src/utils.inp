@@ -6,7 +6,7 @@ function bundle default_model_bundle (void)
     scalar self.err = FALSE
     scalar self.verbose = TRUE
     scalar self.error_in_obseq = TRUE          # formerly "epsilon"
-    string self.type_trend = "det"   # {"stochastic" "det"}
+    string self.trend_type = "det"   # {"stochastic" "det"}
     string self.type_slope = "none"  # {"none" "stochastic" "det"}
     scalar self.pd = $pd
 
@@ -259,7 +259,7 @@ function strings get_parameter_labels (const bundle self)
         ret += "Irregular"
     endif
 
-    ret += sprintf("Trend (%s)", self.type_trend)
+    ret += sprintf("Trend (%s)", self.trend_type)
 
     if self.type_slope != "none"
         ret += sprintf("Slope (%s)", self.type_slope)
@@ -301,7 +301,7 @@ function void print_specification (const bundle self)
     printf "\n\nSpecification:\n"
     printf "================\n"
 
-    printf "Trend: %s", self.type_trend
+    printf "Trend: %s", self.trend_type
     printf ", slope: %s", self.type_slope
 
     print_specification_seasonal(self)
